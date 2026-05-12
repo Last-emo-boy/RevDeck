@@ -1,0 +1,1508 @@
+可以，而且这正是一个很好的产品方向。
+
+我会把它设计成一个产品：**RevDeck**。
+
+它不是“终端版 IDA/Ghidra”，也不是“十几个逆向小工具的合集”，而是一个：
+
+> **面向授权逆向、安全研究、固件分析、崩溃分析和大型未知代码理解的 TUI 工作台。**
+
+核心价值不是“我也能反汇编”，而是：
+
+> **把大量未知代码、二进制结构、执行轨迹、差异、日志、笔记、结论，统一组织成一个可搜索、可导航、可标注、可持续分析的项目。**
+
+---
+
+# 一句话产品定位
+
+**RevDeck = 逆向工程的终端驾驶舱。**
+
+它解决的问题是：
+
+当你面对一个陌生目标时，通常会同时有这些东西：
+
+* 一个或多个二进制文件
+* 固件包
+* 反汇编
+* 函数列表
+* 字符串
+* imports / exports
+* CFG / call graph
+* trace
+* crash log
+* pcap / 协议样本
+* 内存取证结果
+* 新旧版本 diff
+* 自己写的笔记
+* 你已经分析过的函数
+* 你怀疑有问题的路径
+* 最终要输出的结论报告
+
+现在这些信息通常散落在 Ghidra、IDA、radare2、Frida、Volatility、文本日志、笔记软件、grep、Excel、终端里。
+
+**RevDeck 的产品目标就是把它们收进一个项目工作台里。**
+
+---
+
+# 产品心智模型
+
+不要把它想成“一个大工具”。
+
+应该把它想成：
+
+```text
+Project
+  ├── Artifacts        输入物：binary、firmware、trace、crash、pcap、memory dump
+  ├── Index            统一索引：函数、字符串、符号、导入表、文件、进程、事件
+  ├── Graph            统一关系图：调用关系、引用关系、路径、trace、diff
+  ├── Lenses           分析视图：Binary、CFG、Trace、Diff、Firmware、Crash、Protocol
+  ├── Notes            笔记、标签、重命名、状态
+  └── Findings         最终结论：风险点、证据链、复现路径、报告
+```
+
+也就是说，**所有功能都不是孤立模块，而是同一个项目数据库上的不同 Lens。**
+
+Lens 可以理解成“观察同一个目标的不同视角”。
+
+---
+
+# 产品主界面
+
+我会做成这种结构：
+
+```text
+┌ RevDeck: router_firmware_v3 ─────────────────────────────────────────────┐
+│ Target: firmware.bin     Arch: MIPS     Status: indexed     Findings: 12 │
+├───────────────┬───────────────────────────────────────┬─────────────────┤
+│ Workspace     │ Main View                             │ Inspector       │
+│               │                                       │                 │
+│ Overview      │  Function Radar                       │ Selected:       │
+│ Binary Map    │                                       │ sub_00412a80    │
+│ Functions     │  score  name          reason          │                 │
+│ Strings       │  98     sub_00412a80  network+system  │ Tags:           │
+│ Imports       │  91     sub_00418fd0  crypto+entropy  │ network         │
+│ Graph Lab     │  87     sub_0040ff20  changed+parser  │ suspicious      │
+│ Trace Lab     │  82     sub_00423110  auth strings    │                 │
+│ Diff Lab      │                                       │ Xrefs: 14       │
+│ Firmware Lab  │                                       │ Calls: system   │
+│ Crash Lab     │                                       │ Strings: /bin/sh│
+│ Memory Lab    │                                       │ Notes: 3        │
+│ Protocol Lab  │                                       │                 │
+│ Notes         │                                       │                 │
+│ Findings      │                                       │                 │
+├───────────────┴───────────────────────────────────────┴─────────────────┤
+│ :find string password   :xrefs sub_00412a80   :tag suspicious   :graph   │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+左边是工作区，中间是主视图，右边是当前对象的上下文，底部是命令栏。
+
+这个设计的关键是：**任何对象都可以跳转。**
+
+比如：
+
+```text
+字符串 -> 引用它的函数 -> 函数 CFG -> trace 中的执行事件 -> crash 栈帧 -> 笔记 -> finding
+```
+
+这样产品会有一种“逆向知识图谱”的感觉。
+
+---
+
+# 产品核心循环
+
+RevDeck 的用户循环应该非常清晰：
+
+```text
+导入目标
+  ↓
+自动索引
+  ↓
+生成总览
+  ↓
+发现高价值入口
+  ↓
+跳转到函数 / trace / diff / crash / 协议 / 固件文件
+  ↓
+标记、重命名、写笔记
+  ↓
+形成 finding
+  ↓
+输出报告
+```
+
+这比“打开一个反汇编窗口然后慢慢看”更产品化。
+
+---
+
+# 产品模块设计
+
+## 1. Overview：项目总览
+
+打开项目后，用户首先看到的不是一堆反汇编，而是一个分析仪表盘。
+
+```text
+┌ Overview ─────────────────────────────────────────────────────┐
+│ Files: 1842             Binaries: 37          Arch: MIPS/ARM   │
+│ Functions: 12874        Strings: 42110        Imports: 602     │
+│ Suspicious: 43          New in v3: 91         Crashes: 8       │
+├───────────────────────────────────────────────────────────────┤
+│ Top Findings                                                  │
+│  [High] system() reachable from HTTP handler                   │
+│  [Med ] hardcoded credential candidate                         │
+│  [Med ] new unauthenticated endpoint in v3                      │
+├───────────────────────────────────────────────────────────────┤
+│ Suggested Next Steps                                           │
+│  1. Review 12 high-score network functions                     │
+│  2. Compare firmware v2 -> v3 changed auth handlers             │
+│  3. Inspect strings containing password/token/key               │
+└───────────────────────────────────────────────────────────────┘
+```
+
+这个页面很重要，因为它让用户不用一开始就迷失。
+
+RevDeck 应该始终回答一个问题：
+
+> **我现在应该看哪里？**
+
+---
+
+## 2. Binary Map：二进制结构地图
+
+这是传统逆向入口。
+
+功能包括：
+
+* 文件格式识别：ELF / PE / Mach-O
+* 架构识别：x86、x64、ARM、MIPS、RISC-V
+* sections / segments
+* symbols
+* imports / exports
+* relocations
+* strings
+* entropy
+* 编译器痕迹
+* debug info
+* 入口点
+* 可疑权限段
+* packed / stripped 提示
+
+界面类似：
+
+```text
+┌ Sections ────────┐ ┌ Hex / Disasm ───────────────────────────┐
+│ .text    RX      │ │ 00401000  push rbp                      │
+│ .rodata  R       │ │ 00401001  mov rbp, rsp                  │
+│ .data    RW      │ │ 00401004  lea rdi, [rip+0x2030]         │
+│ .bss     RW      │ │ 0040100b  call puts                     │
+└──────────────────┘ └─────────────────────────────────────────┘
+┌ Entropy / Imports / Strings / Xrefs ─────────────────────────┐
+```
+
+但它不只是浏览器。它要和其他模块联动：
+
+* 在 `.rodata` 看到一个 URL，按 Enter 跳到引用函数。
+* 在 import 看到 `system`，按 Enter 跳到所有调用点。
+* 在函数里看到字符串，按 Enter 回到字符串视图。
+* 在地址上按 `n` 写笔记。
+* 在函数上按 `t` 打标签。
+
+---
+
+## 3. Function Radar：函数优先级雷达
+
+这是 RevDeck 的灵魂功能之一。
+
+逆向最大的痛点不是“没有函数列表”，而是：
+
+> **函数太多，不知道先看哪一个。**
+
+Function Radar 给每个函数打分。
+
+```text
+┌ Function Radar ───────────────────────────────────────────────┐
+│ score │ function      │ size │ calls │ strings │ reasons      │
+│  98   │ sub_00412a80  │ 812  │ 17    │ 6       │ network, cmd  │
+│  94   │ sub_00418fd0  │ 533  │ 9     │ 2       │ crypto, key   │
+│  89   │ sub_0040ff20  │ 1204 │ 22    │ 11      │ parser, input │
+│  83   │ sub_00423110  │ 302  │ 4     │ 5       │ auth, token   │
+└───────────────────────────────────────────────────────────────┘
+```
+
+评分维度可以包括：
+
+* 函数大小
+* 被调用次数
+* 调用外部 API 数量
+* 是否靠近入口点
+* 是否引用敏感字符串
+* 是否调用危险 API
+* 是否包含高 entropy 常量
+* 是否有复杂 CFG
+* 是否出现在 crash stack 中
+* 是否在新版本中发生变化
+* 是否在 trace 中被频繁执行
+* 是否靠近网络输入、文件输入、协议解析路径
+* 是否和用户标记的 source / sink 有路径关系
+
+这会让产品非常有用，因为它帮用户节省大量“找入口”的时间。
+
+---
+
+## 4. Graph Lab：CFG / Call Graph / Dataflow 工作区
+
+Graph Lab 是专门看关系的地方。
+
+它不应该一上来画一张巨大的全局图，那样 TUI 会很难用。更好的方式是**局部图导航**。
+
+```text
+┌ Call Graph: sub_00412a80 ─────────────────────────────────────┐
+│                                                               │
+│                 http_handler                                  │
+│                      │                                        │
+│                      ▼                                        │
+│              parse_request                                    │
+│                      │                                        │
+│                      ▼                                        │
+│              sub_00412a80                                     │
+│                ├───────┬────────┐                             │
+│                ▼       ▼        ▼                             │
+│            strcmp   sprintf   system                          │
+│                                                               │
+└───────────────────────────────────────────────────────────────┘
+```
+
+Graph Lab 里有几种视图：
+
+### 函数内 CFG
+
+看一个函数内部的 basic blocks。
+
+```text
+entry
+  ├── if auth_ok
+  │     └── handle_admin
+  └── reject
+```
+
+### 函数间 Call Graph
+
+看谁调用谁。
+
+```text
+main -> init -> server_loop -> http_handler -> parse_request
+```
+
+### Xref Graph
+
+看某个字符串、地址、import、常量被谁引用。
+
+```text
+"/bin/sh"
+  ├── sub_00412a80
+  ├── sub_00413320
+  └── sub_004188f0
+```
+
+### Source-to-Sink Path
+
+这是安全分析里很有价值的功能。
+
+```text
+recv()
+  ↓
+parse_header()
+  ↓
+copy_to_buffer()
+  ↓
+sprintf()
+  ↓
+system()
+```
+
+哪怕第一版只是启发式路径，也很有产品价值。
+
+---
+
+## 5. Trace Lab：执行轨迹浏览器
+
+这是 RevDeck 和传统静态工具拉开差距的模块。
+
+Trace Lab 用来回答：
+
+> **程序实际运行时走了哪条路？值怎么变？谁写了这块内存？哪个函数第一次解密出这个字符串？**
+
+界面可以是：
+
+```text
+┌ Trace Timeline ───────────────────────────────────────────────┐
+│ main -> init -> load_config -> server_loop -> handle_request  │
+│                                      -> auth_check -> system  │
+├───────────────────────┬───────────────────────┬──────────────┤
+│ Events                │ Registers / Args       │ Memory Diff  │
+│ 10241 call strcmp     │ rdi = "admin"          │              │
+│ 10242 ret  strcmp=0   │ rax = 0                │              │
+│ 10243 call sprintf    │ dst = 0x7fff...        │ +32 bytes    │
+│ 10244 call system     │ arg = "reboot"         │              │
+└───────────────────────┴───────────────────────┴──────────────┘
+```
+
+支持的数据来源可以很多：
+
+* Frida trace
+* debugger trace
+* QEMU trace
+* syscall trace
+* eBPF trace
+* 自定义 JSONL trace
+* 程序日志
+* rr / perf 转换结果
+
+第一版不必自己做动态插桩。先做一个标准 trace 格式：
+
+```json
+{"type":"call","ts":10241,"func":"strcmp","args":["admin","admin"]}
+{"type":"ret","ts":10242,"func":"strcmp","ret":0}
+{"type":"call","ts":10243,"func":"system","args":["reboot"]}
+```
+
+然后 RevDeck 做可视化、搜索、跳转、标记。
+
+Trace Lab 需要支持这些问题：
+
+```text
+:trace find call system
+:trace find arg contains password
+:trace who-wrote 0x7fff1234
+:trace first-seen "/bin/sh"
+:trace diff run1 run2
+```
+
+这个模块会非常有吸引力。
+
+---
+
+## 6. Diff Lab：二进制版本差异分析
+
+Diff Lab 用来分析：
+
+* 新旧版本固件
+* 安全补丁
+* 闭源程序升级
+* 供应链组件变化
+* 恶意样本变种
+* 编译选项变化
+
+界面：
+
+```text
+┌ Diff: firmware_v2 -> firmware_v3 ─────────────────────────────┐
+│ Summary                                                       │
+│  Added files: 42        Removed files: 3       Changed: 318    │
+│  Added imports: system, popen                                  │
+│  New strings: /api/debug, token, shell                         │
+├───────────────────────────────────────────────────────────────┤
+│ Changed Functions                                             │
+│ similarity │ old          │ new          │ reasons             │
+│   0.92     │ sub_401020   │ sub_501020   │ +branch, +string    │
+│   0.71     │ sub_4021a0   │ sub_502410   │ auth path changed   │
+│   NEW      │ -            │ sub_508800   │ calls system        │
+└───────────────────────────────────────────────────────────────┘
+```
+
+Diff Lab 可以支持几层 diff：
+
+### 文件级 diff
+
+```text
+added / removed / changed files
+```
+
+### 二进制结构 diff
+
+```text
+sections changed
+imports changed
+symbols changed
+resources changed
+```
+
+### 字符串 diff
+
+```text
+new URLs
+new commands
+new credentials
+new debug endpoints
+```
+
+### 函数 diff
+
+```text
+function size changed
+hash changed
+CFG changed
+calls changed
+```
+
+### 行为 diff
+
+如果有 trace：
+
+```text
+run_v2: auth_check -> reject
+run_v3: auth_check -> debug_shell -> system
+```
+
+这会是一个很实用的产品模块。
+
+---
+
+## 7. Firmware Lab：固件分析工作台
+
+Firmware Lab 负责处理固件这种“大包套小包”的场景。
+
+它的目标不是一开始就替代 binwalk，而是把解包后的结果组织起来。
+
+```text
+┌ Firmware Layout ────────────┐ ┌ File Tree ───────────────────┐
+│ bootloader                  │ │ /etc                         │
+│ kernel                      │ │ /etc/init.d                  │
+│ rootfs.squashfs             │ │ /bin                         │
+│ config                      │ │ /www                         │
+└─────────────────────────────┘ │ /lib                         │
+                                └──────────────────────────────┘
+┌ Findings ────────────────────────────────────────────────────┐
+│ hardcoded credential candidate in /etc/passwd                 │
+│ suspicious CGI endpoint /www/cgi-bin/debug.cgi                │
+│ binary /bin/upgrade calls system                              │
+│ private key candidate in /etc/ssl                             │
+└───────────────────────────────────────────────────────────────┘
+```
+
+Firmware Lab 应该做这些事：
+
+* 固件目录树
+* 文件类型识别
+* ELF 批量索引
+* 脚本入口分析
+* init 脚本关系
+* Web 路由 / CGI 映射
+* 配置文件扫描
+* 证书 / key / token 候选
+* busybox / openssl / dropbear 等组件识别
+* 可执行文件调用关系
+* 高风险文件聚合
+* 新旧固件 diff
+
+这个模块天然可以和 Binary Map、Function Radar、Diff Lab 联动。
+
+例如：
+
+```text
+/www/cgi-bin/login.cgi
+  ↓
+references string "password"
+  ↓
+calls /bin/auth_helper
+  ↓
+auth_helper has high-risk function
+  ↓
+function changed in firmware v3
+```
+
+这就是 RevDeck 的优势：不是单点工具，而是跨对象导航。
+
+---
+
+## 8. Crash Lab：崩溃分析和样本聚类
+
+Crash Lab 面向 fuzzing、漏洞分析、稳定性测试。
+
+输入可以是：
+
+* ASAN log
+* UBSAN log
+* core dump 元信息
+* Rust panic
+* Go panic
+* Java stack trace
+* Python traceback
+* Windows crash log
+* fuzzing corpus metadata
+
+界面：
+
+```text
+┌ Crash Groups ─────────────────────────────────────────────────┐
+│ count │ signature               │ top frame        │ severity │
+│  123  │ heap-use-after-free      │ parse_header     │ high     │
+│   42  │ stack-buffer-overflow    │ read_packet      │ high     │
+│   19  │ null-deref               │ decode_message   │ medium   │
+└───────────────────────────────────────────────────────────────┘
+┌ Stack Trace ─────────────────┐ ┌ Related Functions ──────────┐
+│ #0 parse_header              │ │ parse_header                 │
+│ #1 handle_packet             │ │ handle_packet                │
+│ #2 server_loop               │ │ read_packet                  │
+└──────────────────────────────┘ └─────────────────────────────┘
+```
+
+关键能力：
+
+* 按 stack signature 聚类
+* 去重
+* 新增 / 已知 / 已修复 状态
+* 关联输入样本
+* 关联函数
+* 关联源码位置
+* 关联二进制地址
+* 关联 Diff Lab：这个 crash 是否只在新版本出现？
+* 关联 Trace Lab：崩溃前的调用轨迹是什么？
+
+Crash Lab 的真正价值是把 crash 从“文本日志”变成“可导航对象”。
+
+---
+
+## 9. Memory Lab：内存取证浏览器
+
+Memory Lab 处理内存 dump 和取证结果。
+
+第一版可以不自己解析内存镜像，而是导入 Volatility、Rekall 或其他工具输出的 JSON。
+
+界面：
+
+```text
+┌ Process Tree ──────────────┐ ┌ Process Inspector ────────────┐
+│ System                     │ │ PID: 4820                     │
+│ └─ services.exe            │ │ Name: suspicious.exe          │
+│    └─ suspicious.exe       │ │ Cmd: ...                      │
+│       └─ child.exe         │ │ Modules: 42                   │
+└────────────────────────────┘ │ Handles: 128                  │
+                               └───────────────────────────────┘
+┌ Network / Modules / Handles / Memory Regions ─────────────────┐
+```
+
+功能：
+
+* 进程树
+* DLL / module 列表
+* 网络连接
+* 命令行
+* 打开的文件
+* handles
+* 内存区域
+* 可疑注入区域
+* 时间线
+* dump 出来的 PE/ELF 与 Binary Map 联动
+* 可疑字符串与 Strings 联动
+
+这个模块适合防御分析、恶意样本分析、取证审计。
+
+---
+
+## 10. Protocol Lab：协议逆向工作台
+
+Protocol Lab 处理 pcap、串口数据、私有协议消息、hex dump。
+
+目标是帮用户理解：
+
+* 哪些字节是长度？
+* 哪些字节是 opcode？
+* 哪些字段稳定？
+* 哪些字段像 checksum？
+* request 和 response 怎么配对？
+* 状态机是什么？
+
+界面：
+
+```text
+┌ Messages ───────────────┐ ┌ Hex / Field View ────────────────┐
+│ #1 C -> S  len 32       │ │ 00 20 01 ff  00 00 00 08 ...     │
+│ #2 S -> C  len 16       │ │ len │ cmd │ flags │ payload      │
+│ #3 C -> S  len 64       │ └──────────────────────────────────┘
+└─────────────────────────┘
+┌ Field Statistics ─────────────────────────────────────────────┐
+│ offset 0x00-0x01: likely length                               │
+│ offset 0x02:      likely opcode                               │
+│ offset 0x03:      flags candidate                             │
+└───────────────────────────────────────────────────────────────┘
+```
+
+功能：
+
+* 消息列表
+* hex 视图
+* 字段手动标注
+* 字段统计
+* 长度字段候选
+* opcode 聚类
+* request / response 匹配
+* 状态机草图
+* 多样本 diff
+* 导出 Kaitai Struct / Wireshark dissector 草稿
+
+它也可以和 Trace Lab 联动：
+
+```text
+网络包 #42
+  ↓
+触发 trace 中的 recv()
+  ↓
+进入 parse_packet()
+  ↓
+崩溃在 parse_header()
+```
+
+这就是产品整合的意义。
+
+---
+
+## 11. Notes：逆向笔记系统
+
+这个模块不能当附属功能，应该是核心。
+
+大型逆向项目经常跨几天、几周甚至几个月。用户真正需要的是保存自己的理解过程。
+
+Notes 需要支持：
+
+* 函数重命名
+* 变量 / 地址备注
+* 标签
+* 状态
+* TODO
+* 假设
+* 证据链接
+* 分析时间线
+* Markdown 笔记
+* 引用对象
+* 反向链接
+
+例如：
+
+```text
+sub_00412a80
+  name: handle_debug_command
+  tags: network, command-exec, reviewed
+  status: suspicious
+  note:
+    Receives command from HTTP parameter `cmd`.
+    Reaches system() if debug flag is enabled.
+  evidence:
+    - string "/api/debug"
+    - call to system
+    - trace event #10422
+    - changed in firmware v3
+```
+
+这会让 RevDeck 变成“逆向项目管理器”。
+
+---
+
+## 12. Findings：结论和报告
+
+Findings 是最终输出层。
+
+一个 Finding 不是一句话，而是一个带证据链的对象。
+
+```text
+Finding: Unauthenticated command execution path
+
+Severity: High
+
+Summary:
+  HTTP debug endpoint can reach system() without authentication.
+
+Evidence:
+  - File: /www/cgi-bin/debug.cgi
+  - String: "/api/debug"
+  - Function: handle_debug_command
+  - Import: system
+  - Trace: request_03 reaches system("reboot")
+  - Diff: endpoint introduced in firmware v3
+
+Status:
+  confirmed
+
+Tags:
+  command-exec, firmware, network
+```
+
+报告可以导出：
+
+* Markdown
+* HTML
+* JSON
+* SARIF
+* SQLite bundle
+* 项目归档包
+
+这个功能让 RevDeck 从“分析工具”变成“交付工具”。
+
+---
+
+# 最重要的产品抽象：统一对象图
+
+要把所有东西集成在一个产品里，核心不是 UI，而是数据模型。
+
+我会设计一个统一对象图：
+
+```text
+Artifact
+  ├── File
+  │     ├── Binary
+  │     │     ├── Section
+  │     │     ├── Symbol
+  │     │     ├── Function
+  │     │     │     ├── BasicBlock
+  │     │     │     ├── Instruction
+  │     │     │     ├── Call
+  │     │     │     └── Xref
+  │     │     ├── String
+  │     │     └── Import
+  │     ├── Script
+  │     ├── Config
+  │     └── Resource
+  ├── Trace
+  │     ├── TraceEvent
+  │     ├── CallEvent
+  │     ├── MemoryEvent
+  │     └── SyscallEvent
+  ├── Crash
+  │     ├── StackFrame
+  │     └── InputSample
+  ├── ProtocolCapture
+  │     ├── Message
+  │     └── Field
+  └── MemoryImage
+        ├── Process
+        ├── Module
+        ├── Handle
+        └── Region
+```
+
+然后所有对象都能挂：
+
+```text
+Note
+Tag
+Finding
+Score
+Status
+SourceLocation
+Evidence
+```
+
+关系边包括：
+
+```text
+CALLS
+REFERENCES
+CONTAINS
+IMPORTS
+EXPORTS
+READS
+WRITES
+EXECUTES
+APPEARS_IN_TRACE
+APPEARS_IN_CRASH
+CHANGED_IN_VERSION
+DERIVED_FROM
+EVIDENCE_FOR
+```
+
+有了这个对象图，所有模块都可以互相跳转。
+
+比如：
+
+```text
+Finding
+  -> Function
+  -> Import system
+  -> Trace event
+  -> Firmware file
+  -> Diff change
+  -> Note
+```
+
+这才是“集成”的本质。
+
+---
+
+# 命令系统设计
+
+TUI 产品必须有强大的命令栏。
+
+底部命令栏类似 Vim / Obsidian / VS Code command palette 的结合。
+
+```text
+:find string password
+:xrefs system
+:graph sub_00412a80
+:tag sub_00412a80 suspicious
+:rename sub_00412a80 handle_debug_command
+:trace find system
+:diff firmware_v2 firmware_v3
+:crash group by top-frame
+:protocol guess-fields sample1
+:finding new high "Unauthenticated command execution"
+```
+
+也可以支持自然一点的查询语法：
+
+```text
+functions where calls(system) and references("/bin/sh")
+functions changed in v3 and score > 80
+strings contains "password" or "token"
+trace events where arg contains "admin"
+crashes where frame contains "parse"
+files where type=elf and arch=mips
+```
+
+这个查询能力会让 RevDeck 非常强。
+
+---
+
+# 插件系统
+
+要集成这么多能力，必须插件化。
+
+产品核心只负责：
+
+* 项目管理
+* 数据库
+* 对象图
+* TUI
+* 跳转
+* 笔记
+* findings
+* 查询
+* 任务调度
+
+具体分析能力做成插件。
+
+插件类型可以分成几类：
+
+```text
+Importer    导入器
+Analyzer    分析器
+Lens        视图
+Scorer      评分器
+Exporter    导出器
+Action      操作
+```
+
+例子：
+
+```text
+importer.elf
+importer.pe
+importer.ghidra-json
+importer.r2-json
+importer.frida-trace
+importer.volatility-json
+importer.pcap
+importer.asan-log
+
+analyzer.strings
+analyzer.imports
+analyzer.function-radar
+analyzer.cfg
+analyzer.diff
+analyzer.protocol-fields
+analyzer.crash-cluster
+
+lens.binary-map
+lens.function-radar
+lens.graph-lab
+lens.trace-lab
+lens.diff-lab
+lens.firmware-lab
+lens.crash-lab
+lens.protocol-lab
+
+exporter.markdown-report
+exporter.html-report
+exporter.sarif
+```
+
+插件之间通过统一 schema 交换数据，而不是互相直接依赖。
+
+---
+
+# 后端架构
+
+我会设计成四层。
+
+```text
+┌──────────────────────────────────────────────┐
+│ TUI Frontend                                  │
+│ Ratatui/Textual/Bubble Tea                    │
+├──────────────────────────────────────────────┤
+│ Workspace Layer                               │
+│ views, commands, navigation, keybindings      │
+├──────────────────────────────────────────────┤
+│ Core Engine                                   │
+│ project DB, graph, query, jobs, notes         │
+├──────────────────────────────────────────────┤
+│ Analysis Plugins                              │
+│ ELF/PE, strings, disasm, CFG, trace, diff     │
+├──────────────────────────────────────────────┤
+│ External Tool Adapters                        │
+│ Ghidra, radare2, angr, Frida, Volatility      │
+└──────────────────────────────────────────────┘
+```
+
+关键点：
+**RevDeck 不要一开始自己重写所有分析器。**
+
+它应该尽量吃已有工具的输出：
+
+* Ghidra 导出的函数 / 反编译 / xref
+* radare2 JSON
+* angr CFG
+* Frida trace
+* Volatility JSON
+* ASAN log
+* pcap
+* binwalk 解包目录
+* 自己的轻量 ELF/PE 解析
+
+这会让产品更快成型。
+
+---
+
+# 技术路线建议
+
+如果你想认真做成一个大项目，我推荐：
+
+## 前端
+
+**Rust + Ratatui**
+
+原因：
+
+* 性能好
+* 单文件发布体验好
+* 适合长期维护
+* TUI 控制力强
+* 适合处理大量数据
+* 适合做索引和图算法
+
+## 项目数据库
+
+可以用：
+
+```text
+SQLite
+```
+
+第一版就用 SQLite，很实用。
+
+表可以包括：
+
+```text
+artifacts
+files
+binaries
+sections
+functions
+basic_blocks
+instructions
+strings
+imports
+xrefs
+trace_events
+crashes
+protocol_messages
+notes
+tags
+findings
+edges
+```
+
+如果后期关系图复杂，可以再引入图数据库或自定义 graph index。第一版别过度设计。
+
+## 分析插件
+
+Rust 原生能力：
+
+* object / goblin：解析 ELF、PE、Mach-O
+* capstone：反汇编
+* gimli：DWARF
+* petgraph：图结构
+* tree-sitter：源码 / 伪代码结构
+* regex / aho-corasick：字符串和规则扫描
+
+外部适配：
+
+* Ghidra headless 导出
+* radare2 / rizin JSON
+* angr Python 分析结果
+* Frida trace JSONL
+* Volatility JSON
+* tshark / pcap 转 JSON
+
+## 项目目录
+
+```text
+.revdeck/
+  project.sqlite
+  artifacts/
+    firmware.bin
+    rootfs/
+    traces/
+    crashes/
+  cache/
+    disasm/
+    cfg/
+    strings/
+  notes/
+  reports/
+  plugins/
+```
+
+---
+
+# 用户工作流示例
+
+## 场景一：分析一个未知 ELF
+
+```bash
+revdeck open ./target.elf
+```
+
+进入 Overview：
+
+```text
+Binary indexed.
+Arch: x86_64
+Functions: 1842
+Imports: 91
+Strings: 4302
+High-score functions: 17
+```
+
+用户按 `r` 进入 Function Radar。
+
+看到：
+
+```text
+98  sub_4019a0  calls system, references "/bin/sh"
+```
+
+按 Enter。
+
+进入函数视图：
+
+```text
+Disasm + Strings + Xrefs + Inspector
+```
+
+按 `g` 看图：
+
+```text
+recv -> parse -> sub_4019a0 -> system
+```
+
+按 `n` 写笔记：
+
+```text
+可能是命令执行路径，需要动态验证。
+```
+
+导入 trace：
+
+```bash
+revdeck import trace run1.jsonl
+```
+
+Trace Lab 中看到：
+
+```text
+HTTP request with cmd=reboot reaches system("reboot")
+```
+
+创建 finding。
+
+---
+
+## 场景二：分析固件升级包
+
+```bash
+revdeck open firmware_v2/
+revdeck import firmware_v3/
+revdeck diff firmware_v2 firmware_v3
+```
+
+Diff Lab 显示：
+
+```text
+New CGI endpoint: /www/cgi-bin/debug.cgi
+New string: "/api/debug"
+Changed binary: /bin/httpd
+New import: system
+```
+
+用户跳到 `/bin/httpd` 的 Function Radar。
+
+看到新函数：
+
+```text
+NEW sub_508800 calls system, references "/api/debug"
+```
+
+进入 Graph Lab：
+
+```text
+http_handler -> debug_handler -> system
+```
+
+形成 finding：
+
+```text
+v3 introduced unauthenticated debug command endpoint.
+```
+
+---
+
+## 场景三：fuzzing 崩溃分析
+
+```bash
+revdeck import crashes ./asan_logs/
+```
+
+Crash Lab 聚类：
+
+```text
+123 heap-buffer-overflow in parse_header
+42  null-deref in decode_message
+```
+
+用户选择第一个 crash group。
+
+RevDeck 自动关联：
+
+```text
+parse_header function
+related input sample
+related trace
+changed in latest version
+called from protocol parser
+```
+
+用户进入 Protocol Lab，看触发崩溃的消息字段：
+
+```text
+offset 0x00-0x01 likely length
+offset 0x04 controls allocation size
+```
+
+这个跨模块体验会非常强。
+
+---
+
+# MVP 应该怎么砍
+
+千万别第一版就做“全能逆向平台”。
+
+我建议 MVP 只做一个非常清晰的闭环：
+
+> **导入二进制 → 自动索引 → 函数雷达 → 字符串/import/xref → 笔记标签 → finding → 报告**
+
+也就是：
+
+```text
+RevDeck v0.1
+  ├── Project DB
+  ├── ELF parser
+  ├── strings
+  ├── imports
+  ├── symbols
+  ├── basic disassembly
+  ├── functions list
+  ├── function scoring
+  ├── xrefs
+  ├── notes
+  ├── tags
+  ├── findings
+  └── TUI navigation
+```
+
+先不要做：
+
+* 自己反编译
+* 完整 CFG 恢复
+* 动态调试
+* 内存取证
+* 高级符号执行
+* 自动漏洞利用
+* 花哨大图渲染
+* 插件市场
+
+v0.1 的目标是让用户觉得：
+
+> “这个东西能帮我快速知道一个二进制里哪些函数值得看，并且能把我的分析过程保存下来。”
+
+这就足够有价值。
+
+---
+
+# v0.2 到 v1.0 路线图
+
+## v0.1：Binary Triage
+
+重点：单个二进制快速摸底。
+
+功能：
+
+* 打开 ELF
+* sections / symbols / strings / imports
+* 函数列表
+* 反汇编
+* 简单 xrefs
+* 函数评分
+* 标签、笔记、finding
+
+---
+
+## v0.2：Graph Lab
+
+重点：关系导航。
+
+新增：
+
+* call graph
+* xref graph
+* 简单 CFG
+* source-to-sink 启发式路径
+* 图视图中的跳转和标记
+
+---
+
+## v0.3：Diff Lab
+
+重点：版本对比。
+
+新增：
+
+* binary diff
+* strings diff
+* imports diff
+* function hash diff
+* function size diff
+* changed functions ranking
+* diff findings
+
+---
+
+## v0.4：Trace Lab
+
+重点：动态轨迹。
+
+新增：
+
+* trace JSONL 导入
+* call timeline
+* syscall timeline
+* args / ret 浏览
+* trace event 和函数关联
+* trace diff
+
+---
+
+## v0.5：Firmware Lab
+
+重点：固件项目。
+
+新增：
+
+* 解包目录导入
+* 文件树
+* 批量 ELF 索引
+* init 脚本扫描
+* Web 路由 / CGI 探测
+* config / key / credential 候选
+* 固件 diff
+
+---
+
+## v0.6：Crash Lab
+
+重点：崩溃聚类。
+
+新增：
+
+* ASAN / UBSAN / panic log 解析
+* crash grouping
+* stack frame 和函数关联
+* crash 状态管理
+* crash finding
+
+---
+
+## v0.7：Protocol Lab
+
+重点：协议样本理解。
+
+新增：
+
+* hex message 导入
+* pcap 转消息
+* 字段标注
+* 字段统计
+* opcode / length 候选
+* 消息 diff
+
+---
+
+## v0.8：Memory Lab
+
+重点：取证对象浏览。
+
+新增：
+
+* Volatility JSON 导入
+* 进程树
+* modules
+* handles
+* network connections
+* memory regions
+* dumped binaries 联动 Binary Map
+
+---
+
+## v0.9：Plugin API
+
+重点：生态和扩展。
+
+新增：
+
+* 插件 manifest
+* importer plugin
+* analyzer plugin
+* lens plugin
+* scorer plugin
+* exporter plugin
+
+---
+
+## v1.0：完整 RevDeck 项目工作台
+
+重点：稳定、可交付。
+
+新增：
+
+* 项目归档
+* 报告生成
+* 多 artifact 管理
+* query language
+* 快捷键系统
+* 配置文件
+* team handoff bundle
+* 文档和示例项目
+
+---
+
+# 产品最有辨识度的 5 个卖点
+
+## 1. Function Radar
+
+不是给你一万个函数，而是告诉你：
+
+```text
+这 20 个最值得先看。
+```
+
+## 2. Universal Jump
+
+任何东西都能跳转：
+
+```text
+string -> xref -> function -> graph -> trace -> crash -> finding
+```
+
+## 3. Analysis Memory
+
+用户的理解过程被保存：
+
+```text
+重命名、标签、笔记、状态、证据链。
+```
+
+## 4. Multi-artifact Project
+
+不是只打开一个文件，而是打开一个项目：
+
+```text
+firmware + binaries + traces + crashes + pcaps + notes + reports
+```
+
+## 5. Terminal Native
+
+适合：
+
+* SSH
+* 服务器
+* 容器
+* CI 产物分析
+* 远程样本环境
+* 键盘流
+* 低资源机器
+
+---
+
+# 产品名字方向
+
+`RevDeck` 很合适，因为它有“驾驶舱 / deck”的感觉。
+
+
+我会选 **RevDeck**。
+
+完整 tagline：
+
+> **RevDeck — a terminal-native reverse engineering workspace for binaries, firmware, traces, crashes, and findings.**
+
+中文可以叫：
+
+> **RevDeck：终端原生的逆向分析工作台。**
+
+---
+
+# 最终产品形态
+
+我心里的 RevDeck 是这样的：
+
+```text
+revdeck open target.bin
+revdeck open firmware/
+revdeck import trace run.jsonl
+revdeck import crashes ./asan/
+revdeck diff v1/ v2/
+revdeck report
+```
+
+进入 TUI 后，它不是一个简单浏览器，而是一个项目系统：
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ Overview: 我现在该看哪里                                     │
+│ Binary Map: 这个东西是什么结构                               │
+│ Function Radar: 哪些函数最值得看                             │
+│ Graph Lab: 关系和路径是什么                                  │
+│ Trace Lab: 实际运行怎么走                                    │
+│ Diff Lab: 新旧版本改了什么                                   │
+│ Firmware Lab: 固件里藏着什么                                 │
+│ Crash Lab: 崩溃集中在哪里                                    │
+│ Protocol Lab: 消息格式是什么                                 │
+│ Notes: 我已经理解了什么                                      │
+│ Findings: 最终可以交付什么                                   │
+└──────────────────────────────────────────────────────────────┘
+```
+
+我认为这个产品真正的定位应该是：
+
+> **不是替代 IDA/Ghidra，而是补上“逆向过程管理 + 多来源证据联动 + TUI 高速导航”这一层。**
+
+这会让它有清晰的差异化。
+
+传统逆向工具强在“看一个函数”。
+RevDeck 强在“管理一个逆向项目”。
