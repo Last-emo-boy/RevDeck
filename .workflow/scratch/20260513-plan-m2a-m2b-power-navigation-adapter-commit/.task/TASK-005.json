@@ -1,0 +1,16 @@
+{
+  "id": "TASK-005",
+  "title": "M2A M2B Tests",
+  "wave": 3,
+  "depends_on": ["TASK-001", "TASK-002", "TASK-003", "TASK-004"],
+  "files": ["tests/plugin-sdk/tests/plugin_sdk.rs", "tests/tui/tests/tui_workspace.rs"],
+  "convergence_criteria": [
+    "TUI tests cover Graph Lab and Command Deck",
+    "Plugin tests cover commit, run --commit, audit status, and object counts",
+    "Workspace tests pass"
+  ],
+  "verification": ["cargo test --workspace"],
+  "status": "completed",
+  "completed_at": "2026-05-13T22:45:00+08:00",
+  "execution_session": ".workflow/.csv-wave/20260513-execute-m2a-m2b-power-navigation-adapter-commit/context.md"
+}

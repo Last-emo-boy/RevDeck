@@ -1,0 +1,16 @@
+{
+  "id": "TASK-003",
+  "title": "ObjectBatch Commit And Contribution Audit",
+  "wave": 2,
+  "depends_on": [],
+  "files": ["crates/revdeck-db/", "crates/revdeck-plugin-host/src/lib.rs"],
+  "convergence_criteria": [
+    "Validated ObjectBatch commits objects and edges transactionally",
+    "Plugin run audit records succeeded or failed commit status",
+    "Contribution counts are returned in host output"
+  ],
+  "verification": ["cargo test -p revdeck-plugin-host", "cargo test -p revdeck-db"],
+  "status": "completed",
+  "completed_at": "2026-05-13T22:45:00+08:00",
+  "execution_session": ".workflow/.csv-wave/20260513-execute-m2a-m2b-power-navigation-adapter-commit/context.md"
+}

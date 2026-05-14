@@ -1,0 +1,13 @@
+[package]
+name = "revdeck-memory-tests"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+revdeck-core = { path = "../../crates/revdeck-core" }
+revdeck-db = { path = "../../crates/revdeck-db" }
+rusqlite.workspace = true
+time.workspace = true

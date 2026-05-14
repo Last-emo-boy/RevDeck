@@ -1,0 +1,28 @@
+{
+  "id": "TASK-006",
+  "title": "Plugin SDK Conformance Tests",
+  "wave": 6,
+  "depends_on": ["TASK-002", "TASK-004", "TASK-005"],
+  "files": ["tests/plugin-sdk/Cargo.toml", "tests/plugin-sdk/src/lib.rs", "tests/plugin-sdk/tests/plugin_sdk.rs", "fixtures/plugins/"],
+  "read_first": ["tests/commands/Cargo.toml", "tests/tui/Cargo.toml", "fixtures/manifest.json", "crates/revdeck-index/src/lib.rs"],
+  "steps": [
+    "Add tests/plugin-sdk integration crate.",
+    "Create valid and invalid plugin manifest fixtures under fixtures/plugins.",
+    "Add tests for manifest validation, inspect output, invalid permission denial, ObjectBatch dry-run, deterministic digest, and CLI validate/inspect/test.",
+    "Include Windows path normalization and CRLF fixture coverage where practical."
+  ],
+  "convergence_criteria": [
+    "Conformance tests fail on invalid manifest fixtures and pass on valid fixtures.",
+    "CLI integration tests cover validate, inspect, and test.",
+    "ObjectBatch dry-run tests prove no DB mutation.",
+    "Permission denial tests are explicit and sanitized."
+  ],
+  "verification": ["cargo test -p revdeck-plugin-sdk-tests"],
+  "status": "completed",
+  "completed_at": "2026-05-13T19:31:00+08:00",
+  "execution_session": ".workflow/.csv-wave/20260513-execute-m1-sdk-contract-preview/context.md",
+  "result": {
+    "summary": "Fixture-backed conformance tests cover valid and invalid manifests, ObjectBatch dry-run, host checks, and CLI plugin commands.",
+    "tests_passed": "cargo test -p revdeck-plugin-sdk-tests passed; cargo test --workspace passed"
+  }
+}

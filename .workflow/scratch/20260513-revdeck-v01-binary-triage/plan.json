@@ -1,0 +1,585 @@
+{
+  "metadata": {
+    "id": "20260513-revdeck-v01-binary-triage-plan",
+    "title": "RevDeck v0.1 Binary Triage MVP Implementation Plan",
+    "phase_dir": ".workflow/scratch/20260513-revdeck-v01-binary-triage",
+    "session_folder": ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage",
+    "created_at": "2026-05-13T01:45:00+08:00",
+    "status": "planned",
+    "scope": {
+      "include": [
+        "Project creation/open and SQLite-backed project DB",
+        "Native binary triage ingest for deterministic ELF fixtures",
+        "SQLite objects/edges object graph with stable ObjectRef",
+        "Function Radar with structured score reasons",
+        "Three-pane Ratatui workspace shell and command bar",
+        "Universal local object navigation",
+        "Analysis memory: notes, tags, renames, statuses, TODOs, hypotheses",
+        "Findings with evidence links and Markdown/JSON export"
+      ],
+      "exclude": [
+        "Trace Lab",
+        "Diff Lab",
+        "Firmware Lab",
+        "Crash Lab",
+        "Protocol Lab",
+        "Memory Lab",
+        "Plugin marketplace",
+        "Full decompiler replacement",
+        "Global graph rendering",
+        "Dynamic instrumentation",
+        "Exploit automation"
+      ],
+      "mvp_statement": "Prove the binary triage loop: import a binary, persist indexed objects, surface high-value functions, navigate evidence, preserve analyst memory, and export reportable findings."
+    },
+    "sources": [
+      "RevDeck.txt",
+      ".workflow/scratch/20260513-revdeck-v01-binary-triage/context.md",
+      ".workflow/scratch/20260513-revdeck-v01-binary-triage/index.json",
+      ".workflow/.csv-wave/20260513-brainstorm-revdeck-tui-product-iteration-based-on-r/context.md",
+      ".workflow/.csv-wave/20260513-brainstorm-revdeck-tui-product-iteration-based-on-r/.brainstorming/guidance-specification.md",
+      ".workflow/.csv-wave/20260513-brainstorm-revdeck-tui-product-iteration-based-on-r/.brainstorming/feature-index.json",
+      ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E1-analysis.md",
+      ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E2-analysis.md",
+      ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E3-analysis.md",
+      ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E4-analysis.md"
+    ],
+    "complexity": "high",
+    "task_count": 6,
+    "wave_count": 4
+  },
+  "waves": [
+    {
+      "wave": 1,
+      "title": "Durable Project Foundation",
+      "tasks": [
+        "TASK-001"
+      ],
+      "goal": "Create the workspace scaffold, SQLite schema, stable ObjectRef model, and deterministic test foundation used by every other feature."
+    },
+    {
+      "wave": 2,
+      "title": "Indexing And Object Access",
+      "tasks": [
+        "TASK-002",
+        "TASK-003"
+      ],
+      "goal": "Populate normalized binary triage objects and expose object graph navigation through query and command boundaries."
+    },
+    {
+      "wave": 3,
+      "title": "Triage Intelligence And Analyst Data",
+      "tasks": [
+        "TASK-004",
+        "TASK-005"
+      ],
+      "goal": "Add explainable Function Radar scoring and analyst-owned memory/findings/report data that survive re-indexing."
+    },
+    {
+      "wave": 4,
+      "title": "Terminal Workspace Integration",
+      "tasks": [
+        "TASK-006"
+      ],
+      "goal": "Deliver the three-pane Ratatui Binary Triage workspace over the shared core, command, navigation, scoring, memory, and export services."
+    }
+  ],
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Project DB, Stable Object Graph, And Test Foundation",
+      "summary": "Create the Rust workspace foundation, project lifecycle CLI skeleton, SQLite migrations, stable ObjectRef/object key model, analysis_runs records, and deterministic fixture/test harness.",
+      "wave": 1,
+      "depends_on": [],
+      "read_first": [
+        "RevDeck.txt",
+        ".workflow/scratch/20260513-revdeck-v01-binary-triage/context.md",
+        ".workflow/scratch/20260513-revdeck-v01-binary-triage/index.json",
+        ".workflow/.csv-wave/20260513-brainstorm-revdeck-tui-product-iteration-based-on-r/.brainstorming/guidance-specification.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E1-analysis.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E2-analysis.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E4-analysis.md"
+      ],
+      "files": [
+        {
+          "path": "Cargo.toml",
+          "purpose": "Workspace definition for RevDeck crates and shared dependency versions."
+        },
+        {
+          "path": "crates/revdeck-cli/**",
+          "purpose": "CLI entrypoint and project lifecycle command skeleton."
+        },
+        {
+          "path": "crates/revdeck-core/**",
+          "purpose": "Domain types, ObjectRef, stable object key generation, analysis run models, shared errors."
+        },
+        {
+          "path": "crates/revdeck-db/**",
+          "purpose": "SQLite connection, migrations, repositories, transaction boundaries."
+        },
+        {
+          "path": "fixtures/manifest.json",
+          "purpose": "Deterministic fixture manifest with expected hashes and object counts."
+        },
+        {
+          "path": "tests/**",
+          "purpose": "Integration test harness for project creation, migration, object ID determinism, and analysis run records."
+        }
+      ],
+      "actions": [
+        "Create a Rust workspace with crates for revdeck-cli, revdeck-core, revdeck-db, revdeck-index, and revdeck-tui without implementing later feature behavior.",
+        "Define ObjectRef as the only cross-layer object identity passed between storage, commands, TUI, notes, findings, and exporters.",
+        "Implement deterministic stable object key builders for artifact, section, symbol, function, string, import, xref/edge, score, annotation, and finding references; avoid SQLite row IDs as public IDs.",
+        "Add SQLite migrations for project_meta, artifacts, analysis_runs, objects, edges, object_kind-specific tables, score_reasons, annotations, findings, finding_evidence, and schema_migrations.",
+        "Persist analysis_runs with adapter/analyzer id, version, input hash, status, started_at, finished_at, diagnostics/error_json, and recoverability.",
+        "Make importer/analyzer writes transaction-scoped and separate indexed facts from analyst-owned annotations/findings.",
+        "Add CLI skeleton for init/open/import/index/stats/report/tui with structured errors and no broad lab commands.",
+        "Create fixture manifest structure for source-controlled binaries, expected SHA-256, expected counts, and fixed timestamp handling for tests."
+      ],
+      "tests": [
+        "cargo test -p revdeck-core object_ref",
+        "cargo test -p revdeck-core stable_object_key",
+        "cargo test -p revdeck-db migrations",
+        "cargo test -p revdeck-db project_reopen",
+        "cargo test -p revdeck-db analysis_runs",
+        "cargo test --workspace"
+      ],
+      "convergence": {
+        "criteria": [
+          "`rg \"struct ObjectRef|enum ObjectKind\" crates/revdeck-core` finds the shared identity model.",
+          "`rg \"analysis_runs\" crates/revdeck-db` finds migration and repository coverage.",
+          "`rg \"CREATE TABLE objects|CREATE TABLE edges\" crates/revdeck-db` confirms SQLite object graph tables exist.",
+          "`rg \"schema_migrations\" crates/revdeck-db` confirms migration tracking exists from v0.1.",
+          "`cargo test --workspace` passes with deterministic project create/reopen and stable key tests."
+        ]
+      },
+      "risks": [
+        "A weak ObjectRef model will fragment navigation, annotations, findings, and export evidence.",
+        "Using row IDs as public identities will break re-index, report round trips, and future diff support.",
+        "Missing transaction boundaries can leave partially indexed facts without a trustworthy analysis_runs audit trail."
+      ]
+    },
+    {
+      "id": "TASK-002",
+      "title": "Native Binary Ingest And Deterministic Indexing",
+      "summary": "Implement the v0.1 binary ingest path for deterministic ELF fixtures, including artifact registration, sections, symbols, imports, strings, function candidates, xref/call edges, structured diagnostics, and boundary_confidence.",
+      "wave": 2,
+      "depends_on": [
+        "TASK-001"
+      ],
+      "read_first": [
+        ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-001.json",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E1-analysis.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E2-analysis.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E4-analysis.md"
+      ],
+      "files": [
+        {
+          "path": "crates/revdeck-index/**",
+          "purpose": "Binary parser, string scanner, import/symbol/function extraction, xref/call edge production."
+        },
+        {
+          "path": "crates/revdeck-core/src/artifact*",
+          "purpose": "Artifact and normalized indexed object models."
+        },
+        {
+          "path": "crates/revdeck-core/src/analysis*",
+          "purpose": "Importer/analyzer trait contracts, diagnostics, summaries, and run metadata."
+        },
+        {
+          "path": "crates/revdeck-db/**",
+          "purpose": "Repositories for artifacts, indexed objects, edges, diagnostics, and analysis run updates."
+        },
+        {
+          "path": "fixtures/binaries/**",
+          "purpose": "Checked-in deterministic ELF, stripped ELF, sensitive-string/dangerous-import ELF, unsupported, and corrupt fixtures."
+        },
+        {
+          "path": "tests/indexing/**",
+          "purpose": "End-to-end fixture import and determinism tests."
+        }
+      ],
+      "actions": [
+        "Register artifacts by canonical source path, stored path policy, SHA-256, size, kind, format, architecture, and import status.",
+        "Implement native ELF metadata indexing for sections, symbols, imports, entrypoint metadata, and printable ASCII/UTF-16 strings.",
+        "Create function objects from symbol-backed evidence first, then limited heuristic/entrypoint/import-thunk candidates only when evidence exists.",
+        "Persist function boundary_confidence/source values such as symbol, entrypoint, import_thunk, heuristic, external_adapter, and unknown.",
+        "Build minimal v0.1 edges: CONTAINS, REFERENCES, CALLS_IMPORT, XREF_FROM, DERIVED_FROM; store confidence, source analysis_run, and metadata JSON.",
+        "Persist structured diagnostics for unsupported or corrupt artifacts and keep the project reopenable after failed imports.",
+        "Make re-importing the same artifact idempotent for indexed facts while preserving analyst-owned annotations and finding evidence from later tasks.",
+        "Update CLI import/index/stats paths to exercise the indexing pipeline without requiring TUI."
+      ],
+      "tests": [
+        "cargo test -p revdeck-index fixture_minimal_elf",
+        "cargo test -p revdeck-index fixture_stripped_elf",
+        "cargo test -p revdeck-index fixture_sensitive_imports",
+        "cargo test -p revdeck-index corrupt_artifact_records_failed_run",
+        "cargo test -p revdeck-db reindex_idempotent_indexed_facts",
+        "cargo test --workspace"
+      ],
+      "convergence": {
+        "criteria": [
+          "`rg \"boundary_confidence\" crates/revdeck-core crates/revdeck-index crates/revdeck-db` finds model, migration, and indexing writes.",
+          "`rg \"CALLS_IMPORT|XREF_FROM|REFERENCES|DERIVED_FROM\" crates` confirms v0.1 relation kinds exist.",
+          "`rg \"source-controlled|sha256|expected\" fixtures/manifest.json tests` confirms deterministic fixture expectations are explicit.",
+          "`cargo test -p revdeck-index` passes against checked-in fixtures without compiling fixtures during the test run.",
+          "`revdeck import` on corrupt fixture returns a structured failure and records a failed analysis_run."
+        ]
+      },
+      "risks": [
+        "Function boundary recovery may be weak on stripped binaries; the UI and score model must expose confidence instead of implying precision.",
+        "Fixture binaries built during tests can make counts and addresses non-deterministic across machines.",
+        "Overreaching into full CFG/disassembly would delay the Binary Triage MVP and should remain out of scope."
+      ]
+    },
+    {
+      "id": "TASK-003",
+      "title": "Object Graph Query, Universal Navigation, And Command Pipeline",
+      "summary": "Build the shared ObjectRef query service, local object graph traversal, navigation history, and command parser/resolver/executor separation used by TUI, memory, findings, and export workflows.",
+      "wave": 2,
+      "depends_on": [
+        "TASK-001"
+      ],
+      "read_first": [
+        ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-001.json",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E1-analysis.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E3-analysis.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E4-analysis.md"
+      ],
+      "files": [
+        {
+          "path": "crates/revdeck-core/src/query/**",
+          "purpose": "Object lookup, relation queries, bounded graph traversal, search view models."
+        },
+        {
+          "path": "crates/revdeck-core/src/navigation/**",
+          "purpose": "Navigation state, history entries, back/forward behavior, broken object handling."
+        },
+        {
+          "path": "crates/revdeck-core/src/commands/**",
+          "purpose": "Command AST, parser, resolver, executor, diagnostics."
+        },
+        {
+          "path": "crates/revdeck-db/**",
+          "purpose": "Query repository methods for ObjectRef, edges, xrefs, search, and relation summaries."
+        },
+        {
+          "path": "tests/navigation/**",
+          "purpose": "String -> xref -> function -> import navigation and command mutation-safety tests."
+        },
+        {
+          "path": "tests/commands/**",
+          "purpose": "Table-driven command parser/resolver/executor tests."
+        }
+      ],
+      "actions": [
+        "Expose query APIs that accept and return ObjectRef, never TUI row IDs or raw SQLite row IDs.",
+        "Implement object lookup, search by display/name/address/string/import, edge expansion, backlinks, and bounded local traversal over SQLite objects/edges.",
+        "Implement navigation history that records lens, ObjectRef, cursor/selection context, and broken-link diagnostics for back/forward restoration.",
+        "Split command handling into CommandParser::parse, CommandResolver::resolve, and CommandExecutor::execute; executor must only mutate state after successful resolution.",
+        "Support MVP commands: find, xrefs, open, back, forward, tag, note, rename, status, finding new/link, export markdown/json, and help for unsupported commands.",
+        "Return structured command diagnostics for invalid syntax, unknown command, missing argument, ambiguous target, unresolved target, unsupported-in-v0.1, and broken ObjectRef.",
+        "Create seeded project fixtures for command resolver ambiguity cases such as system matching an import and a string.",
+        "Keep Graph Lab as local relation lists only; do not implement full graph rendering or source-to-sink analysis."
+      ],
+      "tests": [
+        "cargo test -p revdeck-core command_parser",
+        "cargo test -p revdeck-core command_resolver",
+        "cargo test -p revdeck-core command_executor_no_mutation_on_error",
+        "cargo test -p revdeck-core navigation_history",
+        "cargo test -p revdeck-db object_relation_queries",
+        "cargo test --workspace"
+      ],
+      "convergence": {
+        "criteria": [
+          "`rg \"CommandParser|CommandResolver|CommandExecutor\" crates/revdeck-core` finds three separate layers.",
+          "`rg \"navigate_to\\(|back\\(|forward\\(\" crates/revdeck-core tests` finds shared navigation APIs and tests.",
+          "`rg \"Ambiguous|Unresolved|UnsupportedInV01|BrokenObject\" crates/revdeck-core` confirms structured diagnostics exist.",
+          "`cargo test -p revdeck-core command_` proves invalid and ambiguous commands do not mutate notes, tags, findings, or selection.",
+          "Integration tests cover String -> Xref -> Function -> Import -> Back without relying on a TUI renderer."
+        ]
+      },
+      "risks": [
+        "Coupling parser, resolver, and executor can mutate the wrong object when command targets are ambiguous.",
+        "Letting each lens maintain its own selection will split ObjectRef state and break universal navigation.",
+        "Building a broad query language in v0.1 would distract from the concrete binary triage command set."
+      ]
+    },
+    {
+      "id": "TASK-004",
+      "title": "Function Radar Structured Scoring And Triage View Models",
+      "summary": "Implement deterministic Function Radar scoring, structured reason records linked to evidence ObjectRefs, boundary_confidence visibility, stable sort/filter behavior, and reusable Overview/Radar/Inspector view models.",
+      "wave": 3,
+      "depends_on": [
+        "TASK-002",
+        "TASK-003"
+      ],
+      "read_first": [
+        ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-002.json",
+        ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-003.json",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E2-analysis.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E3-analysis.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E4-analysis.md"
+      ],
+      "files": [
+        {
+          "path": "crates/revdeck-core/src/radar/**",
+          "purpose": "Scoring signals, score aggregation, reason model, deterministic ranking, filters."
+        },
+        {
+          "path": "crates/revdeck-core/src/view_models/**",
+          "purpose": "Overview, Function Radar, and inspector view models independent of Ratatui rendering."
+        },
+        {
+          "path": "crates/revdeck-db/**",
+          "purpose": "Repositories for scores, score_reasons, function summaries, evidence joins."
+        },
+        {
+          "path": "crates/revdeck-index/**",
+          "purpose": "Hooks to trigger scoring as an analyzer after indexing completes."
+        },
+        {
+          "path": "tests/radar/**",
+          "purpose": "Scoring signal, reason evidence, tie-breaker, and fixture ranking tests."
+        }
+      ],
+      "actions": [
+        "Create a score reason schema with signal key, contribution/weight, display label, matched evidence ObjectRefs, source analysis_run, and deterministic metadata.",
+        "Implement initial signals for dangerous imports, sensitive strings, xref/call counts, function size/span, entrypoint proximity, boundary_confidence/source, and analyst tags as a separate optional signal.",
+        "Persist score_reasons as structured rows/JSON rather than formatted text; make every visible non-zero score explainable.",
+        "Sort Function Radar rows by score descending, then deterministic tie-breakers such as artifact id, normalized address, and stable object key.",
+        "Expose reason-to-object navigation so a user can jump from a score reason to the specific string/import/xref that caused it.",
+        "Build Overview and Function Radar view models with counts, top functions, status, reasons, tags/status columns, and degraded indexing warnings.",
+        "Show boundary_confidence and source in function summaries and inspector view model so heuristic functions are not presented as exact.",
+        "Add scoring analyzer run records and ensure rerunning scoring updates score facts without deleting analyst-owned memory."
+      ],
+      "tests": [
+        "cargo test -p revdeck-core radar_signal_dangerous_imports",
+        "cargo test -p revdeck-core radar_signal_sensitive_strings",
+        "cargo test -p revdeck-core radar_reason_object_refs",
+        "cargo test -p revdeck-core radar_stable_sort",
+        "cargo test -p revdeck-index scoring_analyzer_run",
+        "cargo test --workspace"
+      ],
+      "convergence": {
+        "criteria": [
+          "`rg \"ScoreReason|reason_code|evidence_refs|contribution\" crates` confirms structured score reasons exist.",
+          "`rg \"boundary_confidence\" crates/revdeck-core/src/radar crates/revdeck-core/src/view_models` confirms confidence is visible in scoring/view models.",
+          "`rg \"dangerous|sensitive|entrypoint|tag\" crates/revdeck-core/src/radar` confirms required v0.1 scoring signals exist.",
+          "Fixture tests assert score ordering, reason labels, contribution values, and stable tie-breakers.",
+          "No Function Radar row with a non-zero score can render from a view model with an empty reason list."
+        ]
+      },
+      "risks": [
+        "A score without structured evidence cannot be tested, navigated, or defended in findings.",
+        "Non-deterministic iteration over maps or SQL results can reorder Radar rows and destabilize tests/reports.",
+        "User tag influence must be explicit so analysis memory changes do not silently rewrite objective indexing evidence."
+      ]
+    },
+    {
+      "id": "TASK-005",
+      "title": "Analysis Memory, Findings Evidence, And Markdown/JSON Export",
+      "summary": "Implement analyst-owned annotations, tags, renames, statuses, TODOs, hypotheses, structured findings with evidence links, pre-export validation, and deterministic Markdown/JSON reports that survive re-indexing.",
+      "wave": 3,
+      "depends_on": [
+        "TASK-002",
+        "TASK-003"
+      ],
+      "read_first": [
+        ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-002.json",
+        ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-003.json",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E1-analysis.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E3-analysis.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E4-analysis.md"
+      ],
+      "files": [
+        {
+          "path": "crates/revdeck-core/src/memory/**",
+          "purpose": "Notes, tags, statuses, renames, TODOs, hypotheses, annotation models and services."
+        },
+        {
+          "path": "crates/revdeck-core/src/findings/**",
+          "purpose": "Finding model, evidence links, validation, severity/status ordering."
+        },
+        {
+          "path": "crates/revdeck-core/src/export/**",
+          "purpose": "Canonical JSON export model and Markdown formatter from the same data model."
+        },
+        {
+          "path": "crates/revdeck-db/**",
+          "purpose": "Repositories for annotations, finding_evidence, re-index preservation, and resolver joins."
+        },
+        {
+          "path": "crates/revdeck-cli/**",
+          "purpose": "Report command wiring for Markdown and JSON output."
+        },
+        {
+          "path": "tests/memory/**",
+          "purpose": "Persistence, re-index preservation, rename consistency, and evidence link tests."
+        },
+        {
+          "path": "tests/export/**",
+          "purpose": "JSON round-trip, Markdown golden, missing evidence validation, stable ordering tests."
+        }
+      ],
+      "actions": [
+        "Implement analyst-owned annotations that attach to ObjectRef and are never replaced by importer/analyzer re-index operations.",
+        "Support notes, tags, rename history, status values, TODO, and hypothesis records with timestamps and optional evidence refs.",
+        "Make renamed display names resolve consistently in Function Radar, object search, inspector, findings, and export while preserving original stable object identity.",
+        "Implement findings with id, title, severity, status, summary/body, tags, timestamps, and ordered evidence links to ObjectRef plus optional annotation context.",
+        "Add pre-export validation for missing evidence, unresolved ObjectRef, empty summary/body, unknown severity/status, and draft findings.",
+        "Define JSON export as canonical and generate Markdown from the same canonical finding/evidence graph with deterministic ordering and normalized timestamps in tests.",
+        "Wire CLI report export for markdown/json and keep export independent of Ratatui state.",
+        "Add re-index tests proving notes/tags/renames/status/findings/evidence survive indexing replacement of raw facts."
+      ],
+      "tests": [
+        "cargo test -p revdeck-core memory_annotations",
+        "cargo test -p revdeck-db reindex_preserves_analysis_memory",
+        "cargo test -p revdeck-core findings_evidence",
+        "cargo test -p revdeck-core export_json_round_trip",
+        "cargo test -p revdeck-core export_markdown_golden",
+        "cargo test --workspace"
+      ],
+      "convergence": {
+        "criteria": [
+          "`rg \"Note|Tag|Rename|Status|Todo|Hypothesis\" crates/revdeck-core/src/memory crates/revdeck-db` finds first-class analysis memory models and persistence.",
+          "`rg \"finding_evidence|EvidenceRef|pre_export\" crates` confirms findings are evidence-linked and validated before export.",
+          "`rg \"Markdown|Json|Export\" crates/revdeck-core/src/export crates/revdeck-cli` confirms both required formats are implemented.",
+          "Tests prove re-index does not delete or orphan analyst-owned notes, tags, renames, statuses, findings, or evidence links.",
+          "JSON export includes stable ObjectRef values and Markdown export includes human-readable evidence context."
+        ]
+      },
+      "risks": [
+        "If annotations use view-local identifiers, re-indexing or renames will orphan evidence and reports.",
+        "Markdown-only export would be readable but too lossy for round-trip and future automation.",
+        "Findings without pre-export validation can silently omit evidence and undermine the product deliverable."
+      ]
+    },
+    {
+      "id": "TASK-006",
+      "title": "Three-Pane Ratatui Workspace Integration",
+      "summary": "Deliver the v0.1 TUI workspace: left navigation, main lens, right inspector, bottom command bar, reducer-driven state, local object jumps, Function Radar, analysis memory, findings, export feedback, and terminal-size fallbacks.",
+      "wave": 4,
+      "depends_on": [
+        "TASK-003",
+        "TASK-004",
+        "TASK-005"
+      ],
+      "read_first": [
+        ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-003.json",
+        ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-004.json",
+        ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-005.json",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E1-analysis.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E2-analysis.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E3-analysis.md",
+        ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E4-analysis.md"
+      ],
+      "files": [
+        {
+          "path": "crates/revdeck-tui/**",
+          "purpose": "Ratatui app state, reducer, event loop, layout, lenses, inspector, command bar, render tests."
+        },
+        {
+          "path": "crates/revdeck-cli/**",
+          "purpose": "open/tui command wiring and non-interactive error handling."
+        },
+        {
+          "path": "crates/revdeck-core/src/view_models/**",
+          "purpose": "Shared view models consumed by TUI without direct DB access during rendering."
+        },
+        {
+          "path": "tests/tui/**",
+          "purpose": "Reducer tests, TestBackend snapshots, viewport fallback tests, command integration smoke tests."
+        },
+        {
+          "path": "README.md",
+          "purpose": "Minimal v0.1 usage notes if documentation is introduced during implementation."
+        }
+      ],
+      "actions": [
+        "Implement an Elm-style TUI loop: Event -> Action -> reducer update -> view model load -> render; avoid direct SQLite queries inside render functions.",
+        "Build a stable three-pane layout with left Workspace navigation, center Main View, right Inspector, and bottom command/status bar.",
+        "Limit v0.1 workspace entries to Overview, Binary Map, Function Radar, Functions, Strings, Imports, Notes, and Findings; do not show Trace/Diff/Firmware/Crash/Protocol/Memory Labs as shipped entries.",
+        "Render Function Radar with score, function/name/address, size/span, calls/imports, strings, structured reasons, boundary_confidence, tags/status, and deterministic selection.",
+        "Render Inspector from ObjectRef with metadata, score reasons, related strings/imports/xrefs, tags, notes, linked findings, backlinks, and broken-link warnings.",
+        "Wire command mode to the shared command parser/resolver/executor for find, xrefs, tag, note, rename, status, finding, export, back, and forward.",
+        "Add state reducers for lens switching, selection movement, navigate_to, history back/forward, command errors, export success/warnings, and project open/index status.",
+        "Add terminal-size fallbacks so small terminals keep command/status visible and do not overlap left, main, inspector, or command regions."
+      ],
+      "tests": [
+        "cargo test -p revdeck-tui reducer_navigation",
+        "cargo test -p revdeck-tui reducer_command_results",
+        "cargo test -p revdeck-tui render_workspace_three_pane",
+        "cargo test -p revdeck-tui render_small_terminal_fallback",
+        "cargo test -p revdeck-tui function_radar_inspector_snapshot",
+        "cargo test --workspace"
+      ],
+      "convergence": {
+        "criteria": [
+          "`rg \"ratatui|crossterm\" crates/revdeck-tui Cargo.toml` confirms the TUI stack.",
+          "`rg \"Workspace|Main View|Inspector|Command\" crates/revdeck-tui` confirms the three-pane plus command/status structure.",
+          "`rg \"Overview|Binary Map|Function Radar|Strings|Imports|Notes|Findings\" crates/revdeck-tui` confirms v0.1 lenses and excludes future Labs from primary nav.",
+          "`rg \"TestBackend|reducer\" crates/revdeck-tui tests/tui` confirms deterministic TUI state/render coverage.",
+          "A fixture project can be opened in TUI, navigate Function Radar -> reason evidence -> note/tag -> finding -> export status without direct render-time DB mutation."
+        ]
+      },
+      "risks": [
+        "Render-driven DB access will make TUI tests brittle and hide state bugs.",
+        "Showing roadmap Labs in v0.1 nav can create false expectations and scope creep.",
+        "Command integration must use the shared resolver; otherwise TUI shortcuts and command bar may mutate different state paths."
+      ]
+    }
+  ],
+  "verification": {
+    "required_gates": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets -- -D warnings",
+      "cargo test --workspace",
+      "Fixture determinism: import the same binary twice into fresh projects and once into an existing project; stable ObjectRef sets, analysis_runs, Function Radar order, and report output must match.",
+      "Re-index preservation: notes, tags, renames, statuses, findings, and finding_evidence remain resolvable after indexed facts are replaced.",
+      "Command safety: parser/resolver/executor tests prove invalid, ambiguous, and unsupported commands do not mutate project state.",
+      "TUI state: reducer tests and Ratatui TestBackend snapshots cover the three-pane layout, inspector, command errors, and small terminal fallback.",
+      "Export: JSON round-trip and Markdown golden tests use the same canonical finding/evidence model."
+    ],
+    "fixtures": [
+      "minimal ELF with expected sections, symbols, imports, strings, functions, and object counts",
+      "stripped ELF with degraded function boundary_confidence",
+      "ELF containing sensitive strings and dangerous imports for Function Radar reasons",
+      "unsupported non-binary file",
+      "corrupt/truncated file with failed analysis_run",
+      "seeded project containing notes, tags, renames, statuses, findings, and evidence links"
+    ],
+    "readiness_gate": {
+      "requirements_coverage_minimum": 0.4,
+      "blocking_conditions": [
+        "Any task missing read_first",
+        "Any task missing convergence.criteria",
+        "Any task planning full Trace/Diff/Firmware/Crash/Protocol/Memory Lab implementation",
+        "No stable ObjectRef/ObjectKey plan",
+        "No deterministic fixture/import/re-index tests",
+        "No Markdown and JSON export path"
+      ],
+      "status": "passed"
+    },
+    "collision_notes": "The repository currently contains only RevDeck.txt plus workflow artifacts. Planned implementation files are future paths and no existing code ownership conflicts were observed."
+  },
+  "confidence": {
+    "overall": 0.87,
+    "dimensions": {
+      "requirements_coverage": 0.92,
+      "task_quality": 0.88,
+      "dependency_correctness": 0.86,
+      "estimation_accuracy": 0.78,
+      "collision_safety": 0.91
+    },
+    "factors": {
+      "completeness": 0.9,
+      "specificity": 0.88,
+      "structural_validity": 0.9,
+      "user_validation": 0.8,
+      "consistency": 0.89
+    },
+    "weakest_dimension": "estimation_accuracy",
+    "reason": "The product and test boundaries are clear, but exact function/xref quality depends on chosen parser/disassembly crate behavior against fixtures."
+  }
+}

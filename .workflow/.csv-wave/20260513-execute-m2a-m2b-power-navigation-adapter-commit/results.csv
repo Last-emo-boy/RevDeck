@@ -1,0 +1,7 @@
+id,status,findings,files_modified,tests_passed,error
+"TASK-001","completed","Graph Lab is first-class in workspace navigation and `G` opens local relations for the selected object.","crates/revdeck-tui/src/lib.rs;tests/tui/tests/tui_workspace.rs","TUI tests and workspace tests passed",""
+"TASK-002","completed","Command Deck overlay opens with `p`/Ctrl+P, traps navigation until closed, and previews current commands/actions.","crates/revdeck-tui/src/lib.rs;tests/tui/tests/tui_workspace.rs","TUI tests and workspace tests passed",""
+"TASK-003","completed","ObjectBatch commit persists objects, edges, plugin attributes, plugin diagnostics, and plugin run audit status.","crates/revdeck-db/;crates/revdeck-plugin-host/","DB, plugin host, plugin SDK tests, clippy, workspace tests passed",""
+"TASK-004","completed","CLI now exposes `plugin commit` and `plugin run --commit` with structured JSON output.","crates/revdeck-cli/src/main.rs;tests/plugin-sdk/tests/plugin_sdk.rs","plugin SDK tests, cargo-run smoke, installed revdeck smoke passed",""
+"TASK-005","completed","Regression tests cover M2A Graph/Deck and M2B commit/run/audit behavior.","tests/plugin-sdk/tests/plugin_sdk.rs;tests/tui/tests/tui_workspace.rs","cargo test --workspace passed",""
+"TASK-006","completed","README and execution audit updated; full verification complete.","README.md;.workflow/.csv-wave/20260513-execute-m2a-m2b-power-navigation-adapter-commit/","fmt, clippy, workspace tests, install, and smoke passed",""

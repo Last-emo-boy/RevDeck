@@ -1,0 +1,41 @@
+{
+  "id": "TASK-002",
+  "title": "Manifest And ObjectBatch Contracts",
+  "wave": 2,
+  "depends_on": ["TASK-001"],
+  "files": [
+    "crates/revdeck-plugin-sdk/src/manifest.rs",
+    "crates/revdeck-plugin-sdk/src/object_batch.rs",
+    "crates/revdeck-plugin-sdk/src/permissions.rs",
+    "crates/revdeck-plugin-sdk/src/validation.rs",
+    "crates/revdeck-plugin-sdk/src/lib.rs"
+  ],
+  "read_first": [
+    "crates/revdeck-core/src/object.rs",
+    "crates/revdeck-core/src/analysis.rs",
+    "crates/revdeck-core/src/export/mod.rs",
+    ".workflow/.csv-wave/20260513-brainstorm-revdeck-plugin-sdk-versatile-reverse/.brainstorming/feature-specs/F-001-plugin-manifest-and-capability-model.md",
+    ".workflow/.csv-wave/20260513-brainstorm-revdeck-plugin-sdk-versatile-reverse/.brainstorming/feature-specs/F-002-stable-schema-and-object-graph-sdk.md"
+  ],
+  "steps": [
+    "Define PluginManifest with identity, sdk_version, revdeck_compat, capabilities, permissions, inputs, outputs, config, UI contribution metadata, and provenance settings.",
+    "Define CapabilityKind and PermissionSet with default-deny semantics.",
+    "Define ObjectBatch, ObjectFact, EdgeFact, TypedAttribute, DiagnosticFact, and DryRunReport using ObjectRef/ObjectKind/EdgeKind from revdeck-core.",
+    "Implement manifest parse/validate from TOML, including semver compatibility parsing and structured validation errors/warnings.",
+    "Implement ObjectBatch dry-run validation for unknown/dangling refs, missing provenance, duplicate object refs, and deterministic normalized summaries."
+  ],
+  "convergence_criteria": [
+    "Valid manifest fixture parses and validates.",
+    "Invalid manifest fixtures return structured validation reports.",
+    "ObjectBatch dry-run can validate a simple object+edge graph without DB mutation.",
+    "Public SDK types are serializable/deserializable."
+  ],
+  "verification": ["cargo test -p revdeck-plugin-sdk"],
+  "status": "completed",
+  "completed_at": "2026-05-13T19:31:00+08:00",
+  "execution_session": ".workflow/.csv-wave/20260513-execute-m1-sdk-contract-preview/context.md",
+  "result": {
+    "summary": "Manifest, permissions, ObjectBatch, and validation contracts implemented with structured diagnostics and deterministic summaries.",
+    "tests_passed": "cargo test -p revdeck-plugin-sdk passed; cargo test --workspace passed"
+  }
+}

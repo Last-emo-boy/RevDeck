@@ -1,0 +1,34 @@
+{
+  "id": "TASK-004",
+  "title": "Plugin Host Dry-Run And Safety Skeleton",
+  "wave": 4,
+  "depends_on": ["TASK-002", "TASK-003"],
+  "files": ["crates/revdeck-plugin-host/Cargo.toml", "crates/revdeck-plugin-host/src/lib.rs"],
+  "read_first": [
+    "crates/revdeck-index/src/lib.rs",
+    "crates/revdeck-db/src/repo.rs",
+    "crates/revdeck-db/src/project.rs",
+    ".workflow/.csv-wave/20260513-brainstorm-revdeck-plugin-sdk-versatile-reverse/.brainstorming/feature-specs/F-006-plugin-execution-safety-and-permissions.md"
+  ],
+  "steps": [
+    "Create revdeck-plugin-host crate depending on revdeck-plugin-sdk and revdeck-db.",
+    "Implement host APIs for validate_manifest, inspect_manifest, dry_run_object_batch, and test_plugin_directory.",
+    "Implement default-deny permission evaluation with structured diagnostics.",
+    "Add a process runner skeleton interface, but keep actual execution minimal and safe for M1: no network, no process spawn unless explicitly allowed, output caps and sanitized diagnostics.",
+    "Record plugin run audit when host test/dry-run executes against a project, if project context is provided."
+  ],
+  "convergence_criteria": [
+    "Host dry-run never mutates DB.",
+    "Permission denial is reported as structured sanitized diagnostics.",
+    "Runner skeleton is testable without launching untrusted code by default.",
+    "Host crate compiles and has focused tests."
+  ],
+  "verification": ["cargo test -p revdeck-plugin-host"],
+  "status": "completed",
+  "completed_at": "2026-05-13T19:31:00+08:00",
+  "execution_session": ".workflow/.csv-wave/20260513-execute-m1-sdk-contract-preview/context.md",
+  "result": {
+    "summary": "Host APIs validate, inspect, dry-run, test plugin directories, and digest audit inputs under a safe M1 skeleton.",
+    "tests_passed": "cargo test -p revdeck-plugin-host passed; cargo clippy --workspace --all-targets -- -D warnings passed"
+  }
+}

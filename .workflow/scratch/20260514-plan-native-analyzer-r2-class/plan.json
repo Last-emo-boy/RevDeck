@@ -1,0 +1,63 @@
+{
+  "id": "20260514-plan-native-analyzer-r2-class",
+  "title": "Native Analyzer Reverse Engineering Roadmap",
+  "status": "in_progress",
+  "source_brainstorm": ".workflow/.csv-wave/20260514-brainstorm-native-r2-class-revdeck/context.md",
+  "objective": "Evolve RevDeck toward an r2-class reverse engineering product through native analysis only, without external compatibility adapters.",
+  "non_goals": [
+    "No external reverse-engineering CLI dependency.",
+    "No JSON import adapter as the primary analysis path.",
+    "No full decompiler in the first native analyzer milestone.",
+    "No live debugger before instruction/basic-block/CFG data models exist."
+  ],
+  "milestones": [
+    {
+      "id": "M3N",
+      "name": "Native CFG Foundation",
+      "priority": "P0",
+      "tasks": ["TASK-001", "TASK-002", "TASK-003", "TASK-004"],
+      "done_when": [
+        "Database persists instructions, basic blocks and CFG edges.",
+        "Native indexer creates these facts for supported fixture binaries.",
+        "Existing analyze/stats flows stay compatible.",
+        "Tests prove no external analyzer command is needed."
+      ]
+    },
+    {
+      "id": "M4N",
+      "name": "Instruction-Driven Xrefs",
+      "priority": "P1",
+      "tasks": ["TASK-005", "TASK-006"],
+      "done_when": [
+        "Xrefs can come from native instruction facts.",
+        "Function Radar uses instruction/block/CFG signals."
+      ]
+    },
+    {
+      "id": "M5N",
+      "name": "Native Graph Workbench",
+      "priority": "P1",
+      "tasks": ["TASK-007", "TASK-008"],
+      "done_when": [
+        "Graph Lab supports CFG/callgraph/xref modes.",
+        "Inspector shows instruction/block provenance and confidence."
+      ]
+    }
+  ],
+  "recommended_first_slice": {
+    "name": "M3N-A Instruction And Block Persistence",
+    "status": "completed",
+    "scope": [
+      "Add DB schema for instructions/basic_blocks/cfg_edges.",
+      "Add typed repository records.",
+      "Create native scanner that emits a conservative instruction stream and one or more basic blocks per function.",
+      "Persist block containment and CFG edges through existing object graph."
+    ]
+  },
+  "verification": [
+    "cargo fmt --all -- --check",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "cargo test --workspace",
+    "external adapter grep audit returns no active product references"
+  ]
+}

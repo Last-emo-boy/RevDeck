@@ -1,0 +1,9 @@
+{
+  "id": "TASK-002",
+  "title": "Native CFG Scanner Slice",
+  "status": "completed",
+  "milestone": "M3N",
+  "files": ["crates/revdeck-index/src/lib.rs"],
+  "description": "Emit conservative instruction and basic block facts from native bytes for current function ranges.",
+  "acceptance": ["ELF fixture produces instruction rows", "PE fixture produces basic block rows", "no external process is invoked"]
+}

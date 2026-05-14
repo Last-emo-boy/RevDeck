@@ -1,0 +1,27 @@
+{
+  "id": "TASK-003",
+  "title": "Plugin Run Audit Schema",
+  "wave": 3,
+  "depends_on": ["TASK-002"],
+  "files": ["crates/revdeck-db/migrations/0001_foundation.sql", "crates/revdeck-db/src/repo.rs"],
+  "read_first": ["crates/revdeck-db/migrations/0001_foundation.sql", "crates/revdeck-db/src/repo.rs", "crates/revdeck-db/src/project.rs", "crates/revdeck-index/src/lib.rs"],
+  "steps": [
+    "Add plugin_runs table linked to analysis_runs or otherwise anchored to project audit state.",
+    "Store plugin_id, plugin_version, manifest_digest, input_digest, config_digest, status, permissions_json, diagnostics_json, started_at, finished_at.",
+    "Add repository methods to create/update/list plugin run audit records.",
+    "Keep analysis_runs artifact-wide status semantics unchanged so TUI latest_analysis_run is not polluted by plugin lifecycle states."
+  ],
+  "convergence_criteria": [
+    "Migrations remain idempotent on new and existing project DBs.",
+    "Plugin run audit records round-trip through repository tests.",
+    "No existing analysis run tests regress."
+  ],
+  "verification": ["cargo test -p revdeck-db plugin", "cargo test -p revdeck-db migrations"],
+  "status": "completed",
+  "completed_at": "2026-05-13T19:31:00+08:00",
+  "execution_session": ".workflow/.csv-wave/20260513-execute-m1-sdk-contract-preview/context.md",
+  "result": {
+    "summary": "Plugin run audit schema and repository round-trip implemented without changing analysis run semantics.",
+    "tests_passed": "cargo test -p revdeck-db plugin_runs_round_trip_audit_record passed; cargo test --workspace passed"
+  }
+}

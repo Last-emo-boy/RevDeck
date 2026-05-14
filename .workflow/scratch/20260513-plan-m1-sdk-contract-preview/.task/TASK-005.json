@@ -1,0 +1,31 @@
+{
+  "id": "TASK-005",
+  "title": "CLI Plugin Commands",
+  "wave": 5,
+  "depends_on": ["TASK-004"],
+  "files": ["crates/revdeck-cli/Cargo.toml", "crates/revdeck-cli/src/main.rs"],
+  "read_first": ["crates/revdeck-cli/src/main.rs", "crates/revdeck-cli/Cargo.toml", "tests/commands/tests/command_pipeline.rs"],
+  "steps": [
+    "Add nested PluginCommand enum with validate, inspect, and test subcommands.",
+    "Wire CLI handlers to revdeck-plugin-host.",
+    "Print JSON summaries for machine-readable output, following existing analyze/stats/report style.",
+    "Return non-zero errors for invalid manifests and failed plugin tests."
+  ],
+  "convergence_criteria": [
+    "revdeck plugin validate <manifest> returns success JSON for valid fixture.",
+    "revdeck plugin inspect <manifest> shows capabilities and permissions.",
+    "revdeck plugin test <plugin-dir> runs manifest and dry-run fixture checks.",
+    "Existing CLI commands are unchanged."
+  ],
+  "verification": [
+    "cargo test -p revdeck-cli",
+    "cargo run -p revdeck-cli -- plugin validate fixtures/plugins/valid-minimal/revdeck-plugin.toml"
+  ],
+  "status": "completed",
+  "completed_at": "2026-05-13T19:31:00+08:00",
+  "execution_session": ".workflow/.csv-wave/20260513-execute-m1-sdk-contract-preview/context.md",
+  "result": {
+    "summary": "CLI exposes revdeck plugin validate, inspect, and test with JSON output.",
+    "tests_passed": "cargo run and installed revdeck plugin validate/inspect/test passed"
+  }
+}

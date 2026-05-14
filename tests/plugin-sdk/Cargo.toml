@@ -1,0 +1,20 @@
+[package]
+name = "revdeck-plugin-sdk-tests"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
+revdeck-core = { path = "../../crates/revdeck-core" }
+revdeck-db = { path = "../../crates/revdeck-db" }
+revdeck-plugin-host = { path = "../../crates/revdeck-plugin-host" }
+revdeck-plugin-sdk = { path = "../../crates/revdeck-plugin-sdk" }
+serde_json.workspace = true
+tempfile.workspace = true

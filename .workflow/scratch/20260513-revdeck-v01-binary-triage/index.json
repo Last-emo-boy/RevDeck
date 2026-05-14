@@ -1,0 +1,31 @@
+{
+  "id": "20260513-revdeck-v01-binary-triage",
+  "type": "scratch",
+  "status": "completed",
+  "title": "RevDeck v0.1 Binary Triage MVP",
+  "source": "RevDeck.txt",
+  "brainstorm_dir": ".workflow/.csv-wave/20260513-brainstorm-revdeck-tui-product-iteration-based-on-r",
+  "scope": {
+    "include": ["F-001", "F-002", "F-003", "F-004", "F-005", "F-006"],
+    "partial": ["F-007", "F-008"],
+    "exclude": ["Trace Lab", "Diff Lab", "Firmware Lab", "Crash Lab", "Protocol Lab", "Memory Lab", "Plugin Marketplace"]
+  },
+  "plan": {
+    "path": ".workflow/scratch/20260513-revdeck-v01-binary-triage/plan.json",
+    "task_count": 6,
+    "wave_count": 4,
+    "task_ids": ["TASK-001", "TASK-002", "TASK-003", "TASK-004", "TASK-005", "TASK-006"],
+    "confidence": 0.87
+  },
+  "execution": {
+    "path": ".workflow/.csv-wave/20260513-execute-revdeck-v01-binary-triage",
+    "status": "completed",
+    "completed_tasks": ["TASK-001", "TASK-002", "TASK-003", "TASK-004", "TASK-005", "TASK-006"],
+    "verification": [
+      "cargo fmt --all -- --check",
+      "cargo clippy --workspace --all-targets -- -D warnings",
+      "cargo test --workspace"
+    ]
+  },
+  "updated_at": "2026-05-13T11:16:00+08:00"
+}

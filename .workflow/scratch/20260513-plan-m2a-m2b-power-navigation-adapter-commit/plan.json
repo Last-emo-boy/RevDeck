@@ -1,0 +1,93 @@
+{
+  "id": "20260513-plan-m2a-m2b-power-navigation-adapter-commit",
+  "title": "M2A TUI Power Navigation And M2B Adapter Commit Pipeline",
+  "status": "completed",
+  "source_brainstorm": ".workflow/.csv-wave/20260513-brainstorm-next-power-tui/context.md",
+  "objective": "Advance M2A and M2B with a concrete implementation slice: expose Graph Lab and a minimal Command Deck in the TUI, and add host-mediated ObjectBatch commit with plugin run audit and CLI coverage.",
+  "scope": {
+    "must_have": [
+      "Graph Lab is visible as a first-class workspace lens with a shortcut and tests",
+      "Command Deck minimal overlay previews common commands and current object actions",
+      "TUI command/status area exposes breadcrumbs and status chips",
+      "Plugin host can commit validated ObjectBatch objects and edges transactionally",
+      "Plugin CLI exposes commit and fixture-run commands with JSON output",
+      "Plugin commit records plugin run audit and contribution counts",
+      "README documents M2A/M2B usage and limitations"
+    ],
+    "non_goals": [
+      "full custom plugin renderer",
+      "public marketplace",
+      "arbitrary external process sandbox execution",
+      "complete Trace/Diff/Crash/Firmware Labs",
+      "full typed attribute query UI"
+    ]
+  },
+  "waves": [
+    {
+      "wave": 1,
+      "name": "TUI Power Navigation",
+      "tasks": ["TASK-001", "TASK-002"]
+    },
+    {
+      "wave": 2,
+      "name": "Plugin Commit Pipeline",
+      "tasks": ["TASK-003", "TASK-004"]
+    },
+    {
+      "wave": 3,
+      "name": "Tests Docs Verification",
+      "tasks": ["TASK-005", "TASK-006"]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Expose Graph Lab Workspace Lens",
+      "wave": 1,
+      "files": ["crates/revdeck-tui/src/lib.rs", "tests/tui/tests/tui_workspace.rs"],
+      "depends_on": []
+    },
+    {
+      "id": "TASK-002",
+      "title": "Minimal Command Deck And TUI Polish",
+      "wave": 1,
+      "files": ["crates/revdeck-tui/src/lib.rs", "tests/tui/tests/tui_workspace.rs"],
+      "depends_on": ["TASK-001"]
+    },
+    {
+      "id": "TASK-003",
+      "title": "ObjectBatch Commit And Contribution Audit",
+      "wave": 2,
+      "files": ["crates/revdeck-db/", "crates/revdeck-plugin-host/src/lib.rs"],
+      "depends_on": []
+    },
+    {
+      "id": "TASK-004",
+      "title": "Plugin CLI Commit And Run Commands",
+      "wave": 2,
+      "files": ["crates/revdeck-cli/src/main.rs", "tests/plugin-sdk/tests/plugin_sdk.rs", "fixtures/plugins/"],
+      "depends_on": ["TASK-003"]
+    },
+    {
+      "id": "TASK-005",
+      "title": "M2A M2B Tests",
+      "wave": 3,
+      "files": ["tests/plugin-sdk/tests/plugin_sdk.rs", "tests/tui/tests/tui_workspace.rs", "crates/revdeck-tui/src/lib.rs"],
+      "depends_on": ["TASK-001", "TASK-002", "TASK-003", "TASK-004"]
+    },
+    {
+      "id": "TASK-006",
+      "title": "Docs And Verification",
+      "wave": 3,
+      "files": ["README.md", ".workflow/.csv-wave/20260513-execute-m2a-m2b-power-navigation-adapter-commit/"],
+      "depends_on": ["TASK-005"]
+    }
+  ],
+  "verification": [
+    "cargo fmt --all -- --check",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "cargo test --workspace",
+    "cargo run -p revdeck-cli -- plugin commit <project> fixtures/plugins/valid-minimal",
+    "cargo run -p revdeck-cli -- plugin run <project> fixtures/plugins/valid-minimal --commit"
+  ]
+}

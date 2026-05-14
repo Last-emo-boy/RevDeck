@@ -1,0 +1,33 @@
+{
+  "id": "TASK-007",
+  "title": "README And Full Verification",
+  "wave": 7,
+  "depends_on": ["TASK-001", "TASK-002", "TASK-003", "TASK-004", "TASK-005", "TASK-006"],
+  "files": ["README.md"],
+  "read_first": ["README.md", ".workflow/.csv-wave/20260513-plan-m1-sdk-contract-preview/context.md"],
+  "steps": [
+    "Document plugin SDK preview scope, non-goals, manifest example, CLI commands, safety limitations, and first adapter roadmap.",
+    "Run full formatting, clippy, workspace tests, and CLI smoke commands.",
+    "Record any implementation deviations from plan in the final report."
+  ],
+  "convergence_criteria": [
+    "README accurately reflects implemented M1 preview behavior.",
+    "All planned CLI smoke commands pass.",
+    "Full workspace verification passes."
+  ],
+  "verification": [
+    "cargo fmt --all -- --check",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "cargo test --workspace",
+    "revdeck plugin validate fixtures/plugins/valid-minimal/revdeck-plugin.toml",
+    "revdeck plugin inspect fixtures/plugins/valid-minimal/revdeck-plugin.toml",
+    "revdeck plugin test fixtures/plugins/valid-minimal"
+  ],
+  "status": "completed",
+  "completed_at": "2026-05-13T19:31:00+08:00",
+  "execution_session": ".workflow/.csv-wave/20260513-execute-m1-sdk-contract-preview/context.md",
+  "result": {
+    "summary": "README and execution audit record completed; full verification and global install finished.",
+    "tests_passed": "fmt, clippy, workspace tests, cargo-run smoke, global install, and installed revdeck smoke all passed"
+  }
+}

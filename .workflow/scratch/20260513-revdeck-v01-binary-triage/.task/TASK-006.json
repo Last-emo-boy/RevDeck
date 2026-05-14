@@ -1,0 +1,74 @@
+{
+  "id": "TASK-006",
+  "title": "Three-Pane Ratatui Workspace Integration",
+  "summary": "Deliver the v0.1 TUI workspace: left navigation, main lens, right inspector, bottom command bar, reducer-driven state, local object jumps, Function Radar, analysis memory, findings, export feedback, and terminal-size fallbacks.",
+  "wave": 4,
+  "depends_on": [
+    "TASK-003",
+    "TASK-004",
+    "TASK-005"
+  ],
+  "read_first": [
+    ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-003.json",
+    ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-004.json",
+    ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-005.json",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E1-analysis.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E2-analysis.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E3-analysis.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E4-analysis.md"
+  ],
+  "files": [
+    {
+      "path": "crates/revdeck-tui/**",
+      "purpose": "Ratatui app state, reducer, event loop, layout, lenses, inspector, command bar, render tests."
+    },
+    {
+      "path": "crates/revdeck-cli/**",
+      "purpose": "open/tui command wiring and non-interactive error handling."
+    },
+    {
+      "path": "crates/revdeck-core/src/view_models/**",
+      "purpose": "Shared view models consumed by TUI without direct DB access during rendering."
+    },
+    {
+      "path": "tests/tui/**",
+      "purpose": "Reducer tests, TestBackend snapshots, viewport fallback tests, command integration smoke tests."
+    },
+    {
+      "path": "README.md",
+      "purpose": "Minimal v0.1 usage notes if documentation is introduced during implementation."
+    }
+  ],
+  "actions": [
+    "Implement an Elm-style TUI loop: Event -> Action -> reducer update -> view model load -> render; avoid direct SQLite queries inside render functions.",
+    "Build a stable three-pane layout with left Workspace navigation, center Main View, right Inspector, and bottom command/status bar.",
+    "Limit v0.1 workspace entries to Overview, Binary Map, Function Radar, Functions, Strings, Imports, Notes, and Findings; do not show Trace/Diff/Firmware/Crash/Protocol/Memory Labs as shipped entries.",
+    "Render Function Radar with score, function/name/address, size/span, calls/imports, strings, structured reasons, boundary_confidence, tags/status, and deterministic selection.",
+    "Render Inspector from ObjectRef with metadata, score reasons, related strings/imports/xrefs, tags, notes, linked findings, backlinks, and broken-link warnings.",
+    "Wire command mode to the shared command parser/resolver/executor for find, xrefs, tag, note, rename, status, finding, export, back, and forward.",
+    "Add state reducers for lens switching, selection movement, navigate_to, history back/forward, command errors, export success/warnings, and project open/index status.",
+    "Add terminal-size fallbacks so small terminals keep command/status visible and do not overlap left, main, inspector, or command regions."
+  ],
+  "tests": [
+    "cargo test -p revdeck-tui reducer_navigation",
+    "cargo test -p revdeck-tui reducer_command_results",
+    "cargo test -p revdeck-tui render_workspace_three_pane",
+    "cargo test -p revdeck-tui render_small_terminal_fallback",
+    "cargo test -p revdeck-tui function_radar_inspector_snapshot",
+    "cargo test --workspace"
+  ],
+  "convergence": {
+    "criteria": [
+      "`rg \"ratatui|crossterm\" crates/revdeck-tui Cargo.toml` confirms the TUI stack.",
+      "`rg \"Workspace|Main View|Inspector|Command\" crates/revdeck-tui` confirms the three-pane plus command/status structure.",
+      "`rg \"Overview|Binary Map|Function Radar|Strings|Imports|Notes|Findings\" crates/revdeck-tui` confirms v0.1 lenses and excludes future Labs from primary nav.",
+      "`rg \"TestBackend|reducer\" crates/revdeck-tui tests/tui` confirms deterministic TUI state/render coverage.",
+      "A fixture project can be opened in TUI, navigate Function Radar -> reason evidence -> note/tag -> finding -> export status without direct render-time DB mutation."
+    ]
+  },
+  "risks": [
+    "Render-driven DB access will make TUI tests brittle and hide state bugs.",
+    "Showing roadmap Labs in v0.1 nav can create false expectations and scope creep.",
+    "Command integration must use the shared resolver; otherwise TUI shortcuts and command bar may mutate different state paths."
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "id": "TASK-001",
+  "title": "Project DB, Stable Object Graph, And Test Foundation",
+  "summary": "Create the Rust workspace foundation, project lifecycle CLI skeleton, SQLite migrations, stable ObjectRef/object key model, analysis_runs records, and deterministic fixture/test harness.",
+  "wave": 1,
+  "depends_on": [],
+  "read_first": [
+    "RevDeck.txt",
+    ".workflow/scratch/20260513-revdeck-v01-binary-triage/context.md",
+    ".workflow/scratch/20260513-revdeck-v01-binary-triage/index.json",
+    ".workflow/.csv-wave/20260513-brainstorm-revdeck-tui-product-iteration-based-on-r/.brainstorming/guidance-specification.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E1-analysis.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E2-analysis.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E4-analysis.md"
+  ],
+  "files": [
+    {
+      "path": "Cargo.toml",
+      "purpose": "Workspace definition for RevDeck crates and shared dependency versions."
+    },
+    {
+      "path": "crates/revdeck-cli/**",
+      "purpose": "CLI entrypoint and project lifecycle command skeleton."
+    },
+    {
+      "path": "crates/revdeck-core/**",
+      "purpose": "Domain types, ObjectRef, stable object key generation, analysis run models, shared errors."
+    },
+    {
+      "path": "crates/revdeck-db/**",
+      "purpose": "SQLite connection, migrations, repositories, transaction boundaries."
+    },
+    {
+      "path": "fixtures/manifest.json",
+      "purpose": "Deterministic fixture manifest with expected hashes and object counts."
+    },
+    {
+      "path": "tests/**",
+      "purpose": "Integration test harness for project creation, migration, object ID determinism, and analysis run records."
+    }
+  ],
+  "actions": [
+    "Create a Rust workspace with crates for revdeck-cli, revdeck-core, revdeck-db, revdeck-index, and revdeck-tui without implementing later feature behavior.",
+    "Define ObjectRef as the only cross-layer object identity passed between storage, commands, TUI, notes, findings, and exporters.",
+    "Implement deterministic stable object key builders for artifact, section, symbol, function, string, import, xref/edge, score, annotation, and finding references; avoid SQLite row IDs as public IDs.",
+    "Add SQLite migrations for project_meta, artifacts, analysis_runs, objects, edges, object_kind-specific tables, score_reasons, annotations, findings, finding_evidence, and schema_migrations.",
+    "Persist analysis_runs with adapter/analyzer id, version, input hash, status, started_at, finished_at, diagnostics/error_json, and recoverability.",
+    "Make importer/analyzer writes transaction-scoped and separate indexed facts from analyst-owned annotations/findings.",
+    "Add CLI skeleton for init/open/import/index/stats/report/tui with structured errors and no broad lab commands.",
+    "Create fixture manifest structure for source-controlled binaries, expected SHA-256, expected counts, and fixed timestamp handling for tests."
+  ],
+  "tests": [
+    "cargo test -p revdeck-core object_ref",
+    "cargo test -p revdeck-core stable_object_key",
+    "cargo test -p revdeck-db migrations",
+    "cargo test -p revdeck-db project_reopen",
+    "cargo test -p revdeck-db analysis_runs",
+    "cargo test --workspace"
+  ],
+  "convergence": {
+    "criteria": [
+      "`rg \"struct ObjectRef|enum ObjectKind\" crates/revdeck-core` finds the shared identity model.",
+      "`rg \"analysis_runs\" crates/revdeck-db` finds migration and repository coverage.",
+      "`rg \"CREATE TABLE objects|CREATE TABLE edges\" crates/revdeck-db` confirms SQLite object graph tables exist.",
+      "`rg \"schema_migrations\" crates/revdeck-db` confirms migration tracking exists from v0.1.",
+      "`cargo test --workspace` passes with deterministic project create/reopen and stable key tests."
+    ]
+  },
+  "risks": [
+    "A weak ObjectRef model will fragment navigation, annotations, findings, and export evidence.",
+    "Using row IDs as public identities will break re-index, report round trips, and future diff support.",
+    "Missing transaction boundaries can leave partially indexed facts without a trustworthy analysis_runs audit trail."
+  ]
+}

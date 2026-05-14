@@ -1,0 +1,27 @@
+{
+  "id": "TASK-001",
+  "title": "Workspace Dependencies And SDK Crate Skeleton",
+  "wave": 1,
+  "depends_on": [],
+  "files": ["Cargo.toml", "crates/revdeck-plugin-sdk/Cargo.toml", "crates/revdeck-plugin-sdk/src/lib.rs"],
+  "read_first": ["Cargo.toml", "crates/revdeck-core/src/lib.rs", "crates/revdeck-core/src/object.rs", "crates/revdeck-core/src/export/mod.rs"],
+  "steps": [
+    "Add workspace members for revdeck-plugin-sdk and later host/test crates as needed.",
+    "Add explicit workspace dependencies for toml and semver; only add schemars/jsonschema if manifest schema validation requires it in this slice.",
+    "Create revdeck-plugin-sdk crate that depends on revdeck-core, serde, serde_json, thiserror, toml, and semver.",
+    "Export placeholder modules for manifest, object_batch, permissions, and validation."
+  ],
+  "convergence_criteria": [
+    "cargo metadata recognizes revdeck-plugin-sdk as a workspace package.",
+    "revdeck-plugin-sdk compiles with an empty public surface and no circular dependencies.",
+    "No source code outside workspace config and new crate skeleton changes behavior."
+  ],
+  "verification": ["cargo check -p revdeck-plugin-sdk"],
+  "status": "completed",
+  "completed_at": "2026-05-13T19:31:00+08:00",
+  "execution_session": ".workflow/.csv-wave/20260513-execute-m1-sdk-contract-preview/context.md",
+  "result": {
+    "summary": "Workspace crate skeleton completed for plugin SDK, host, and tests.",
+    "tests_passed": "covered by cargo test --workspace"
+  }
+}

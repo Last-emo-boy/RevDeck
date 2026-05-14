@@ -1,0 +1,97 @@
+{
+  "topic": "RevDeck TUI product iteration based on RevDeck.txt",
+  "source": "RevDeck.txt",
+  "mode": "auto",
+  "role_count": 5,
+  "features": [
+    {
+      "id": "F-001",
+      "slug": "project-ingest-and-index",
+      "title": "Project Ingest And Index",
+      "priority": "P0",
+      "summary": "Create/open projects and import binary artifacts into a persistent SQLite-backed object model.",
+      "roles": ["system-architect", "product-manager", "test-strategist"],
+      "artifacts": [".brainstorming/feature-specs/F-001-project-ingest-and-index.md"]
+    },
+    {
+      "id": "F-002",
+      "slug": "terminal-workspace-shell",
+      "title": "Terminal Workspace Shell",
+      "priority": "P0",
+      "summary": "Provide the three-pane TUI with workspace navigation, active lens, inspector, status line, and command bar.",
+      "roles": ["ui-designer", "ux-expert", "system-architect"],
+      "artifacts": [".brainstorming/feature-specs/F-002-terminal-workspace-shell.md"]
+    },
+    {
+      "id": "F-003",
+      "slug": "function-radar",
+      "title": "Function Radar",
+      "priority": "P0",
+      "summary": "Rank functions by high-value reverse engineering signals and show explainable scoring reasons.",
+      "roles": ["product-manager", "system-architect", "ux-expert", "test-strategist"],
+      "artifacts": [".brainstorming/feature-specs/F-003-function-radar.md"]
+    },
+    {
+      "id": "F-004",
+      "slug": "universal-object-navigation",
+      "title": "Universal Object Navigation",
+      "priority": "P0",
+      "summary": "Jump between related strings, xrefs, functions, imports, notes, findings, and evidence objects.",
+      "roles": ["ui-designer", "ux-expert", "system-architect"],
+      "artifacts": [".brainstorming/feature-specs/F-004-universal-object-navigation.md"]
+    },
+    {
+      "id": "F-005",
+      "slug": "analysis-memory",
+      "title": "Analysis Memory",
+      "priority": "P0",
+      "summary": "Persist notes, tags, renames, statuses, TODOs, hypotheses, and evidence links on any object.",
+      "roles": ["product-manager", "ux-expert", "system-architect"],
+      "artifacts": [".brainstorming/feature-specs/F-005-analysis-memory.md"]
+    },
+    {
+      "id": "F-006",
+      "slug": "findings-and-report-export",
+      "title": "Findings And Report Export",
+      "priority": "P1",
+      "summary": "Promote evidence-linked analysis into structured findings and export Markdown/JSON reports first.",
+      "roles": ["product-manager", "test-strategist", "ux-expert"],
+      "artifacts": [".brainstorming/feature-specs/F-006-findings-and-report-export.md"]
+    },
+    {
+      "id": "F-007",
+      "slug": "graph-lab-seed",
+      "title": "Graph Lab Seed",
+      "priority": "P1",
+      "summary": "Add local graph/path navigation for xrefs, call graph, simple CFG, and source-to-sink sketches.",
+      "roles": ["system-architect", "ui-designer", "test-strategist"],
+      "artifacts": [".brainstorming/feature-specs/F-007-graph-lab-seed.md"]
+    },
+    {
+      "id": "F-008",
+      "slug": "external-tool-adapter-boundary",
+      "title": "External Tool Adapter Boundary",
+      "priority": "P1",
+      "summary": "Define importer/analyzer contracts for external reverse engineering and forensic tool outputs.",
+      "roles": ["system-architect", "product-manager", "test-strategist"],
+      "artifacts": [".brainstorming/feature-specs/F-008-external-tool-adapter-boundary.md"]
+    }
+  ],
+  "resolved_conflicts": [
+    "Broad Lab vision is roadmap; v0.1 execution is Binary Triage.",
+    "Core schema and project DB are product-owned; external tools enter through adapters.",
+    "Graph Lab starts with local navigation rather than global terminal graph rendering."
+  ],
+  "unresolved_items": [
+    "Select exact Rust crates for parsing, disassembly, TUI, and graph storage during implementation planning.",
+    "Validate function-boundary accuracy against fixture binaries."
+  ],
+  "confidence": {
+    "role_coverage": 0.88,
+    "cross_role_consistency": 0.86,
+    "feature_completeness": 0.84,
+    "spec_quality": 0.82,
+    "design_feasibility": 0.78,
+    "overall": 0.84
+  }
+}

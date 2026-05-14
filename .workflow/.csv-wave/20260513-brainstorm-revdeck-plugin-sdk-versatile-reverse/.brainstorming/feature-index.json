@@ -1,0 +1,107 @@
+{
+  "topic": "RevDeck plugin SDK and specialized reverse-engineering expansion",
+  "session": "20260513-brainstorm-revdeck-plugin-sdk-versatile-reverse",
+  "strategy": "Ship a local, adapter-first plugin SDK preview before marketplace or broad custom UI/plugin APIs.",
+  "features": [
+    {
+      "id": "F-001",
+      "slug": "plugin-manifest-and-capability-model",
+      "priority": "P0",
+      "status": "ready-for-plan",
+      "owners": ["system-architect", "product-manager", "test-strategist"],
+      "depends_on": [],
+      "summary": "Machine-validated plugin manifest declaring identity, compatibility, capabilities, permissions, inputs, outputs, UI slots, config schema, determinism, and provenance."
+    },
+    {
+      "id": "F-002",
+      "slug": "stable-schema-and-object-graph-sdk",
+      "priority": "P0",
+      "status": "ready-for-plan",
+      "owners": ["data-architect", "system-architect", "subject-matter-expert"],
+      "depends_on": ["F-001"],
+      "summary": "Stable SDK schemas and host-mediated ObjectBatch APIs for objects, edges, typed attributes, datasets, analysis runs, evidence links, diagnostics, scores, and draft findings."
+    },
+    {
+      "id": "F-003",
+      "slug": "importer-and-adapter-sdk",
+      "priority": "P0",
+      "status": "ready-for-plan",
+      "owners": ["subject-matter-expert", "system-architect", "product-manager"],
+      "depends_on": ["F-001", "F-002", "F-006"],
+      "summary": "Process-based importer/adapter contracts for Ghidra/rizin exports, traces, crashes, firmware trees, pcap/tshark, Volatility JSON, and generic JSONL evidence."
+    },
+    {
+      "id": "F-004",
+      "slug": "specialized-lab-extension-points",
+      "priority": "P1",
+      "status": "design-after-p0-sdk",
+      "owners": ["ui-designer", "subject-matter-expert", "system-architect"],
+      "depends_on": ["F-001", "F-002", "F-003"],
+      "summary": "Declarative host-owned lens, inspector, command, cockpit, and query extension points for Trace, Crash, Firmware, Graph, Diff, Protocol, and Memory labs."
+    },
+    {
+      "id": "F-005",
+      "slug": "scoring-rule-and-triage-pack-sdk",
+      "priority": "P1",
+      "status": "design-after-objectbatch",
+      "owners": ["subject-matter-expert", "test-strategist", "product-manager"],
+      "depends_on": ["F-002", "F-006", "F-007"],
+      "summary": "Explainable scoring/rule-pack SDK where plugins emit provider-attributed score reasons with confidence, evidence refs, suppression state, and deterministic merge behavior."
+    },
+    {
+      "id": "F-006",
+      "slug": "plugin-execution-safety-and-permissions",
+      "priority": "P0",
+      "status": "ready-for-plan",
+      "owners": ["system-architect", "test-strategist", "ui-designer"],
+      "depends_on": ["F-001"],
+      "summary": "Least-privilege process runtime with filesystem, network, process, artifact, project-write, secrets, timeout, output-limit, and redaction scopes recorded per plugin run."
+    },
+    {
+      "id": "F-007",
+      "slug": "developer-tooling-and-test-harness",
+      "priority": "P1",
+      "status": "start-with-sdk-preview",
+      "owners": ["test-strategist", "system-architect", "product-manager"],
+      "depends_on": ["F-001", "F-002", "F-006"],
+      "summary": "SDK scaffolding, manifest validator, headless runner, fixture replay, deterministic digest checks, sandbox tests, and TUI/CLI contract fixtures."
+    },
+    {
+      "id": "F-008",
+      "slug": "plugin-driven-finding-and-report-workflow",
+      "priority": "P2",
+      "status": "defer-until-provenance-and-safety",
+      "owners": ["product-manager", "data-architect", "subject-matter-expert"],
+      "depends_on": ["F-002", "F-005", "F-006", "F-007"],
+      "summary": "Plugin suggestion workflow for draft findings, evidence chains, report fragments, redaction flags, and analyst-confirmed report exports."
+    }
+  ],
+  "roadmap": [
+    {
+      "milestone": "M1 SDK Contract Preview",
+      "features": ["F-001", "F-002", "F-006", "F-007"],
+      "exit_criteria": ["revdeck-plugin.toml validates", "ObjectBatch dry-run works", "process plugin runner records audited runs", "revdeck plugin test runs fixtures"]
+    },
+    {
+      "milestone": "M2 Adapter Proof Pack",
+      "features": ["F-003"],
+      "exit_criteria": ["Ghidra/rizin export adapter", "trace JSONL importer", "ASAN/panic crash importer", "binwalk tree importer"]
+    },
+    {
+      "milestone": "M3 Workflow Depth",
+      "features": ["F-004", "F-005", "F-008"],
+      "exit_criteria": ["Trace/Crash lens templates", "rule pack reasons visible in Function Radar", "plugin finding suggestions remain analyst-gated"]
+    }
+  ],
+  "quality_gate": {
+    "unresolved_conflicts": 0,
+    "confidence": {
+      "role_coverage": 0.95,
+      "cross_role_consistency": 0.9,
+      "feature_completeness": 0.88,
+      "spec_quality": 0.86,
+      "design_feasibility": 0.82,
+      "overall": 0.88
+    }
+  }
+}

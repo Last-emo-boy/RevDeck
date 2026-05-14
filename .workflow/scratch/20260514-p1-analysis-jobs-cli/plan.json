@@ -1,0 +1,34 @@
+{
+  "title": "P1 Analysis Jobs Backend And CLI",
+  "status": "completed",
+  "tasks": [
+    {
+      "id": "P1-1",
+      "title": "Schema and repository",
+      "status": "completed",
+      "files": ["crates/revdeck-db/migrations/0008_analysis_jobs.sql", "crates/revdeck-db/src/migrations.rs", "crates/revdeck-db/src/repo.rs"],
+      "convergence_criteria": ["analysis_jobs table is migrated", "repository can insert, finish, and list jobs"]
+    },
+    {
+      "id": "P1-2",
+      "title": "Importer job recording",
+      "status": "completed",
+      "files": ["crates/revdeck-index/src/lib.rs"],
+      "convergence_criteria": ["parse/surface/seed/cfg/triage jobs are recorded", "quick profile marks cfg skipped"]
+    },
+    {
+      "id": "P1-3",
+      "title": "CLI and docs",
+      "status": "completed",
+      "files": ["crates/revdeck-cli/src/main.rs", "README.md"],
+      "convergence_criteria": ["revdeck jobs <project> lists job history", "README documents jobs command"]
+    },
+    {
+      "id": "P1-4",
+      "title": "Verification",
+      "status": "completed",
+      "files": ["crates/revdeck-db/src/repo.rs", "crates/revdeck-index/src/lib.rs", "crates/revdeck-cli/tests"],
+      "convergence_criteria": ["focused tests pass", "cargo fmt/clippy/test pass"]
+    }
+  ]
+}

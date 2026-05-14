@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "fixed_timestamp": "2026-05-13T00:00:00Z",
+  "fixtures": [
+    {
+      "id": "foundation-empty-project",
+      "path": "fixtures/foundation-empty-project",
+      "kind": "project",
+      "source-controlled": true,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "expected_counts": {
+        "artifacts": 0,
+        "analysis_runs": 0,
+        "objects": 0,
+        "edges": 0
+      }
+    },
+    {
+      "id": "minimal-elf",
+      "path": "fixtures/binaries/minimal_elf",
+      "kind": "binary",
+      "format": "elf",
+      "architecture": "x86_64",
+      "source-controlled": true,
+      "sha256": "b3a53b1b61be84b4d2f31574f7d5232131db213e284f4dec0c174150ec17336c",
+      "expected": {
+        "status": "succeeded",
+        "min_sections": 6,
+        "min_symbols": 3,
+        "min_imports": 1,
+        "min_strings": 2,
+        "min_functions": 3,
+        "boundary_confidence": ["symbol"]
+      }
+    },
+    {
+      "id": "stripped-elf",
+      "path": "fixtures/binaries/stripped_elf",
+      "kind": "binary",
+      "format": "elf",
+      "architecture": "x86_64",
+      "source-controlled": true,
+      "sha256": "9a4710e155677f9679ac5068d25ed9110caa40642c7df1621f950a286281c53b",
+      "expected": {
+        "status": "succeeded",
+        "min_sections": 6,
+        "min_symbols": 0,
+        "min_imports": 0,
+        "min_strings": 2,
+        "min_functions": 1,
+        "boundary_confidence": ["entrypoint", "heuristic"]
+      }
+    },
+    {
+      "id": "sensitive-imports-elf",
+      "path": "fixtures/binaries/sensitive_imports_elf",
+      "kind": "binary",
+      "format": "elf",
+      "architecture": "x86_64",
+      "source-controlled": true,
+      "sha256": "222a8bd854fdbaa952e3013a949e166ae1fde46751bd275d4cf3352c3996b2f5",
+      "expected": {
+        "status": "succeeded",
+        "min_imports": 2,
+        "min_sensitive_strings": 3,
+        "min_xrefs": 4,
+        "relations": ["CALLS_IMPORT", "XREF_FROM", "REFERENCES", "DERIVED_FROM"]
+      }
+    },
+    {
+      "id": "corrupt-elf",
+      "path": "fixtures/binaries/corrupt_elf",
+      "kind": "binary",
+      "format": "unknown",
+      "source-controlled": true,
+      "sha256": "f2ec93816042ee39bc23bf083cd1e86b66b8f98a465b7347ef3793b1449efe9b",
+      "expected": {
+        "status": "failed",
+        "diagnostic_code": "elf_parse_failed"
+      }
+    },
+    {
+      "id": "unsupported-bin",
+      "path": "fixtures/binaries/unsupported.bin",
+      "kind": "binary",
+      "format": "unknown",
+      "source-controlled": true,
+      "sha256": "48642c92e28c3efca0788311f667809699a0063777488d33191e2f9f5a813d3c",
+      "expected": {
+        "status": "failed",
+        "diagnostic_code": "elf_parse_failed"
+      }
+    }
+  ]
+}

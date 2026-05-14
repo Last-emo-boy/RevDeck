@@ -1,0 +1,17 @@
+[package]
+name = "revdeck-tui-tests"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+crossterm.workspace = true
+ratatui.workspace = true
+revdeck-core = { path = "../../crates/revdeck-core" }
+revdeck-db = { path = "../../crates/revdeck-db" }
+revdeck-index = { path = "../../crates/revdeck-index" }
+revdeck-tui = { path = "../../crates/revdeck-tui" }
+tempfile.workspace = true
+time.workspace = true

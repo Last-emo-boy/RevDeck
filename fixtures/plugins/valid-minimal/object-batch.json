@@ -1,0 +1,55 @@
+{
+  "provenance": {
+    "plugin_id": "com.revdeck.examples.valid-minimal",
+    "plugin_version": "0.1.0",
+    "input_digest": "sha256:fixture"
+  },
+  "objects": [
+    {
+      "object_ref": {
+        "kind": "artifact",
+        "key": "artifact/sha256=fixture/path=sample.exe"
+      },
+      "display_name": "sample.exe",
+      "metadata": {}
+    },
+    {
+      "object_ref": {
+        "kind": "function",
+        "key": "function/artifact=fixture/va=0x0000000000401000"
+      },
+      "artifact_key": "artifact/sha256=fixture/path=sample.exe",
+      "display_name": "main",
+      "address": 4198400,
+      "metadata": {}
+    }
+  ],
+  "edges": [
+    {
+      "source": {
+        "kind": "artifact",
+        "key": "artifact/sha256=fixture/path=sample.exe"
+      },
+      "target": {
+        "kind": "function",
+        "key": "function/artifact=fixture/va=0x0000000000401000"
+      },
+      "kind": "contains",
+      "confidence": 1.0,
+      "metadata": {}
+    }
+  ],
+  "attributes": [
+    {
+      "subject": {
+        "kind": "function",
+        "key": "function/artifact=fixture/va=0x0000000000401000"
+      },
+      "namespace": "com.revdeck.examples.valid-minimal",
+      "schema_id": "function-summary.v1",
+      "key": "source",
+      "value": "fixture"
+    }
+  ],
+  "diagnostics": []
+}

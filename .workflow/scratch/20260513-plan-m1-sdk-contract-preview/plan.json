@@ -1,0 +1,119 @@
+{
+  "id": "20260513-plan-m1-sdk-contract-preview",
+  "title": "M1 SDK Contract Preview",
+  "source_brainstorm": ".workflow/.csv-wave/20260513-brainstorm-revdeck-plugin-sdk-versatile-reverse/context.md",
+  "objective": "Implement the first local RevDeck plugin SDK preview: manifest validation, stable ObjectBatch dry-run schemas, plugin execution safety skeleton, CLI plugin commands, and minimal conformance tests.",
+  "scope": {
+    "must_have": [
+      "revdeck-plugin.toml manifest structs and validation",
+      "ObjectBatch graph delta schemas and dry-run validation",
+      "default-deny permission model and sanitized diagnostics",
+      "plugin run audit table or equivalent host-owned run record",
+      "revdeck plugin validate|inspect|test CLI commands",
+      "tests/plugin-sdk fixtures and golden contract tests"
+    ],
+    "non_goals": [
+      "public plugin marketplace",
+      "real OS sandbox hardening beyond safety skeleton",
+      "custom TUI plugin renderers",
+      "plugin direct SQLite access",
+      "full ObjectBatch commit of plugin data unless dry-run foundation is complete"
+    ]
+  },
+  "waves": [
+    {
+      "wave": 1,
+      "name": "Contracts And Workspace Foundation",
+      "tasks": ["TASK-001"]
+    },
+    {
+      "wave": 2,
+      "name": "Manifest And ObjectBatch Contracts",
+      "tasks": ["TASK-002"]
+    },
+    {
+      "wave": 3,
+      "name": "Plugin Run Audit Schema",
+      "tasks": ["TASK-003"]
+    },
+    {
+      "wave": 4,
+      "name": "Host Safety Skeleton",
+      "tasks": ["TASK-004"]
+    },
+    {
+      "wave": 5,
+      "name": "CLI Plugin Commands",
+      "tasks": ["TASK-005"]
+    },
+    {
+      "wave": 6,
+      "name": "Conformance Harness",
+      "tasks": ["TASK-006"]
+    },
+    {
+      "wave": 7,
+      "name": "Docs And Verification",
+      "tasks": ["TASK-007"]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Workspace Dependencies And SDK Crate Skeleton",
+      "wave": 1,
+      "files": ["Cargo.toml", "crates/revdeck-plugin-sdk/Cargo.toml", "crates/revdeck-plugin-sdk/src/lib.rs"],
+      "depends_on": []
+    },
+    {
+      "id": "TASK-002",
+      "title": "Manifest And ObjectBatch Contracts",
+      "wave": 2,
+      "files": ["crates/revdeck-plugin-sdk/src/manifest.rs", "crates/revdeck-plugin-sdk/src/object_batch.rs", "crates/revdeck-plugin-sdk/src/validation.rs"],
+      "depends_on": ["TASK-001"]
+    },
+    {
+      "id": "TASK-003",
+      "title": "Plugin Run Audit Schema",
+      "wave": 3,
+      "files": ["crates/revdeck-db/migrations/0001_foundation.sql", "crates/revdeck-db/src/repo.rs"],
+      "depends_on": ["TASK-002"]
+    },
+    {
+      "id": "TASK-004",
+      "title": "Plugin Host Dry-Run And Safety Skeleton",
+      "wave": 4,
+      "files": ["crates/revdeck-plugin-host/Cargo.toml", "crates/revdeck-plugin-host/src/lib.rs"],
+      "depends_on": ["TASK-002", "TASK-003"]
+    },
+    {
+      "id": "TASK-005",
+      "title": "CLI Plugin Commands",
+      "wave": 5,
+      "files": ["crates/revdeck-cli/Cargo.toml", "crates/revdeck-cli/src/main.rs"],
+      "depends_on": ["TASK-004"]
+    },
+    {
+      "id": "TASK-006",
+      "title": "Plugin SDK Conformance Tests",
+      "wave": 6,
+      "files": ["tests/plugin-sdk/Cargo.toml", "tests/plugin-sdk/src/lib.rs", "tests/plugin-sdk/tests/plugin_sdk.rs", "fixtures/plugins/"],
+      "depends_on": ["TASK-002", "TASK-004", "TASK-005"]
+    },
+    {
+      "id": "TASK-007",
+      "title": "README And Full Verification",
+      "wave": 7,
+      "files": ["README.md"],
+      "depends_on": ["TASK-001", "TASK-002", "TASK-003", "TASK-004", "TASK-005", "TASK-006"]
+    }
+  ],
+  "verification": [
+    "cargo fmt --all -- --check",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "cargo test --workspace",
+    "revdeck plugin validate fixtures/plugins/valid-minimal/revdeck-plugin.toml",
+    "revdeck plugin inspect fixtures/plugins/valid-minimal/revdeck-plugin.toml",
+    "revdeck plugin test fixtures/plugins/valid-minimal"
+  ]
+}

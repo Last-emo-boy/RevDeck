@@ -1,0 +1,9 @@
+{
+  "id": "TASK-004",
+  "title": "Docs And Native-Only Audit",
+  "status": "completed",
+  "milestone": "M3N",
+  "files": ["README.md", ".workflow/.csv-wave/"],
+  "description": "Document native-only analyzer strategy and record verification evidence.",
+  "acceptance": ["README states native analyzer roadmap", "tests and grep audit are recorded"]
+}

@@ -1,0 +1,73 @@
+{
+  "id": "TASK-002",
+  "title": "Native Binary Ingest And Deterministic Indexing",
+  "summary": "Implement the v0.1 binary ingest path for deterministic ELF fixtures, including artifact registration, sections, symbols, imports, strings, function candidates, xref/call edges, structured diagnostics, and boundary_confidence.",
+  "wave": 2,
+  "depends_on": [
+    "TASK-001"
+  ],
+  "read_first": [
+    ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-001.json",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E1-analysis.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E2-analysis.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E4-analysis.md"
+  ],
+  "files": [
+    {
+      "path": "crates/revdeck-index/**",
+      "purpose": "Binary parser, string scanner, import/symbol/function extraction, xref/call edge production."
+    },
+    {
+      "path": "crates/revdeck-core/src/artifact*",
+      "purpose": "Artifact and normalized indexed object models."
+    },
+    {
+      "path": "crates/revdeck-core/src/analysis*",
+      "purpose": "Importer/analyzer trait contracts, diagnostics, summaries, and run metadata."
+    },
+    {
+      "path": "crates/revdeck-db/**",
+      "purpose": "Repositories for artifacts, indexed objects, edges, diagnostics, and analysis run updates."
+    },
+    {
+      "path": "fixtures/binaries/**",
+      "purpose": "Checked-in deterministic ELF, stripped ELF, sensitive-string/dangerous-import ELF, unsupported, and corrupt fixtures."
+    },
+    {
+      "path": "tests/indexing/**",
+      "purpose": "End-to-end fixture import and determinism tests."
+    }
+  ],
+  "actions": [
+    "Register artifacts by canonical source path, stored path policy, SHA-256, size, kind, format, architecture, and import status.",
+    "Implement native ELF metadata indexing for sections, symbols, imports, entrypoint metadata, and printable ASCII/UTF-16 strings.",
+    "Create function objects from symbol-backed evidence first, then limited heuristic/entrypoint/import-thunk candidates only when evidence exists.",
+    "Persist function boundary_confidence/source values such as symbol, entrypoint, import_thunk, heuristic, external_adapter, and unknown.",
+    "Build minimal v0.1 edges: CONTAINS, REFERENCES, CALLS_IMPORT, XREF_FROM, DERIVED_FROM; store confidence, source analysis_run, and metadata JSON.",
+    "Persist structured diagnostics for unsupported or corrupt artifacts and keep the project reopenable after failed imports.",
+    "Make re-importing the same artifact idempotent for indexed facts while preserving analyst-owned annotations and finding evidence from later tasks.",
+    "Update CLI import/index/stats paths to exercise the indexing pipeline without requiring TUI."
+  ],
+  "tests": [
+    "cargo test -p revdeck-index fixture_minimal_elf",
+    "cargo test -p revdeck-index fixture_stripped_elf",
+    "cargo test -p revdeck-index fixture_sensitive_imports",
+    "cargo test -p revdeck-index corrupt_artifact_records_failed_run",
+    "cargo test -p revdeck-db reindex_idempotent_indexed_facts",
+    "cargo test --workspace"
+  ],
+  "convergence": {
+    "criteria": [
+      "`rg \"boundary_confidence\" crates/revdeck-core crates/revdeck-index crates/revdeck-db` finds model, migration, and indexing writes.",
+      "`rg \"CALLS_IMPORT|XREF_FROM|REFERENCES|DERIVED_FROM\" crates` confirms v0.1 relation kinds exist.",
+      "`rg \"source-controlled|sha256|expected\" fixtures/manifest.json tests` confirms deterministic fixture expectations are explicit.",
+      "`cargo test -p revdeck-index` passes against checked-in fixtures without compiling fixtures during the test run.",
+      "`revdeck import` on corrupt fixture returns a structured failure and records a failed analysis_run."
+    ]
+  },
+  "risks": [
+    "Function boundary recovery may be weak on stripped binaries; the UI and score model must expose confidence instead of implying precision.",
+    "Fixture binaries built during tests can make counts and addresses non-deterministic across machines.",
+    "Overreaching into full CFG/disassembly would delay the Binary Triage MVP and should remain out of scope."
+  ]
+}

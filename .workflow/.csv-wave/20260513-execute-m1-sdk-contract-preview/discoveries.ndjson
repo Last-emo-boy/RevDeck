@@ -1,0 +1,1 @@
+{"timestamp":"2026-05-13T19:31:00+08:00","type":"verification","source":"20260513-execute-m1-sdk-contract-preview","finding":"cargo install --path crates/revdeck-cli --locked can fail on Windows with os error 5 when an existing revdeck.exe process is running; stopping the stale revdeck analyze process released the lock and install succeeded."}

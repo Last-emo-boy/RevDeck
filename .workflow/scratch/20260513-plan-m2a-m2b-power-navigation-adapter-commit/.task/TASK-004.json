@@ -1,0 +1,16 @@
+{
+  "id": "TASK-004",
+  "title": "Plugin CLI Commit And Run Commands",
+  "wave": 2,
+  "depends_on": ["TASK-003"],
+  "files": ["crates/revdeck-cli/src/main.rs", "tests/plugin-sdk/tests/plugin_sdk.rs"],
+  "convergence_criteria": [
+    "revdeck plugin commit <project> <plugin_dir> returns JSON commit output",
+    "revdeck plugin run <project> <plugin_dir> --commit performs deterministic fixture replay",
+    "Invalid manifests or batches fail non-zero"
+  ],
+  "verification": ["cargo test -p revdeck-plugin-sdk-tests"],
+  "status": "completed",
+  "completed_at": "2026-05-13T22:45:00+08:00",
+  "execution_session": ".workflow/.csv-wave/20260513-execute-m2a-m2b-power-navigation-adapter-commit/context.md"
+}

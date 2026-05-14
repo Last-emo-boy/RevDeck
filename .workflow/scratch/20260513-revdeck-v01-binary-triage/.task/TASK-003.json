@@ -1,0 +1,73 @@
+{
+  "id": "TASK-003",
+  "title": "Object Graph Query, Universal Navigation, And Command Pipeline",
+  "summary": "Build the shared ObjectRef query service, local object graph traversal, navigation history, and command parser/resolver/executor separation used by TUI, memory, findings, and export workflows.",
+  "wave": 2,
+  "depends_on": [
+    "TASK-001"
+  ],
+  "read_first": [
+    ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-001.json",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E1-analysis.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E3-analysis.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E4-analysis.md"
+  ],
+  "files": [
+    {
+      "path": "crates/revdeck-core/src/query/**",
+      "purpose": "Object lookup, relation queries, bounded graph traversal, search view models."
+    },
+    {
+      "path": "crates/revdeck-core/src/navigation/**",
+      "purpose": "Navigation state, history entries, back/forward behavior, broken object handling."
+    },
+    {
+      "path": "crates/revdeck-core/src/commands/**",
+      "purpose": "Command AST, parser, resolver, executor, diagnostics."
+    },
+    {
+      "path": "crates/revdeck-db/**",
+      "purpose": "Query repository methods for ObjectRef, edges, xrefs, search, and relation summaries."
+    },
+    {
+      "path": "tests/navigation/**",
+      "purpose": "String -> xref -> function -> import navigation and command mutation-safety tests."
+    },
+    {
+      "path": "tests/commands/**",
+      "purpose": "Table-driven command parser/resolver/executor tests."
+    }
+  ],
+  "actions": [
+    "Expose query APIs that accept and return ObjectRef, never TUI row IDs or raw SQLite row IDs.",
+    "Implement object lookup, search by display/name/address/string/import, edge expansion, backlinks, and bounded local traversal over SQLite objects/edges.",
+    "Implement navigation history that records lens, ObjectRef, cursor/selection context, and broken-link diagnostics for back/forward restoration.",
+    "Split command handling into CommandParser::parse, CommandResolver::resolve, and CommandExecutor::execute; executor must only mutate state after successful resolution.",
+    "Support MVP commands: find, xrefs, open, back, forward, tag, note, rename, status, finding new/link, export markdown/json, and help for unsupported commands.",
+    "Return structured command diagnostics for invalid syntax, unknown command, missing argument, ambiguous target, unresolved target, unsupported-in-v0.1, and broken ObjectRef.",
+    "Create seeded project fixtures for command resolver ambiguity cases such as system matching an import and a string.",
+    "Keep Graph Lab as local relation lists only; do not implement full graph rendering or source-to-sink analysis."
+  ],
+  "tests": [
+    "cargo test -p revdeck-core command_parser",
+    "cargo test -p revdeck-core command_resolver",
+    "cargo test -p revdeck-core command_executor_no_mutation_on_error",
+    "cargo test -p revdeck-core navigation_history",
+    "cargo test -p revdeck-db object_relation_queries",
+    "cargo test --workspace"
+  ],
+  "convergence": {
+    "criteria": [
+      "`rg \"CommandParser|CommandResolver|CommandExecutor\" crates/revdeck-core` finds three separate layers.",
+      "`rg \"navigate_to\\(|back\\(|forward\\(\" crates/revdeck-core tests` finds shared navigation APIs and tests.",
+      "`rg \"Ambiguous|Unresolved|UnsupportedInV01|BrokenObject\" crates/revdeck-core` confirms structured diagnostics exist.",
+      "`cargo test -p revdeck-core command_` proves invalid and ambiguous commands do not mutate notes, tags, findings, or selection.",
+      "Integration tests cover String -> Xref -> Function -> Import -> Back without relying on a TUI renderer."
+    ]
+  },
+  "risks": [
+    "Coupling parser, resolver, and executor can mutate the wrong object when command targets are ambiguous.",
+    "Letting each lens maintain its own selection will split ObjectRef state and break universal navigation.",
+    "Building a broad query language in v0.1 would distract from the concrete binary triage command set."
+  ]
+}

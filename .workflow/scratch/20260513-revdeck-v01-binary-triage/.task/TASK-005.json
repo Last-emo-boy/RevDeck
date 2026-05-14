@@ -1,0 +1,79 @@
+{
+  "id": "TASK-005",
+  "title": "Analysis Memory, Findings Evidence, And Markdown/JSON Export",
+  "summary": "Implement analyst-owned annotations, tags, renames, statuses, TODOs, hypotheses, structured findings with evidence links, pre-export validation, and deterministic Markdown/JSON reports that survive re-indexing.",
+  "wave": 3,
+  "depends_on": [
+    "TASK-002",
+    "TASK-003"
+  ],
+  "read_first": [
+    ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-002.json",
+    ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-003.json",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E1-analysis.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E3-analysis.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E4-analysis.md"
+  ],
+  "files": [
+    {
+      "path": "crates/revdeck-core/src/memory/**",
+      "purpose": "Notes, tags, statuses, renames, TODOs, hypotheses, annotation models and services."
+    },
+    {
+      "path": "crates/revdeck-core/src/findings/**",
+      "purpose": "Finding model, evidence links, validation, severity/status ordering."
+    },
+    {
+      "path": "crates/revdeck-core/src/export/**",
+      "purpose": "Canonical JSON export model and Markdown formatter from the same data model."
+    },
+    {
+      "path": "crates/revdeck-db/**",
+      "purpose": "Repositories for annotations, finding_evidence, re-index preservation, and resolver joins."
+    },
+    {
+      "path": "crates/revdeck-cli/**",
+      "purpose": "Report command wiring for Markdown and JSON output."
+    },
+    {
+      "path": "tests/memory/**",
+      "purpose": "Persistence, re-index preservation, rename consistency, and evidence link tests."
+    },
+    {
+      "path": "tests/export/**",
+      "purpose": "JSON round-trip, Markdown golden, missing evidence validation, stable ordering tests."
+    }
+  ],
+  "actions": [
+    "Implement analyst-owned annotations that attach to ObjectRef and are never replaced by importer/analyzer re-index operations.",
+    "Support notes, tags, rename history, status values, TODO, and hypothesis records with timestamps and optional evidence refs.",
+    "Make renamed display names resolve consistently in Function Radar, object search, inspector, findings, and export while preserving original stable object identity.",
+    "Implement findings with id, title, severity, status, summary/body, tags, timestamps, and ordered evidence links to ObjectRef plus optional annotation context.",
+    "Add pre-export validation for missing evidence, unresolved ObjectRef, empty summary/body, unknown severity/status, and draft findings.",
+    "Define JSON export as canonical and generate Markdown from the same canonical finding/evidence graph with deterministic ordering and normalized timestamps in tests.",
+    "Wire CLI report export for markdown/json and keep export independent of Ratatui state.",
+    "Add re-index tests proving notes/tags/renames/status/findings/evidence survive indexing replacement of raw facts."
+  ],
+  "tests": [
+    "cargo test -p revdeck-core memory_annotations",
+    "cargo test -p revdeck-db reindex_preserves_analysis_memory",
+    "cargo test -p revdeck-core findings_evidence",
+    "cargo test -p revdeck-core export_json_round_trip",
+    "cargo test -p revdeck-core export_markdown_golden",
+    "cargo test --workspace"
+  ],
+  "convergence": {
+    "criteria": [
+      "`rg \"Note|Tag|Rename|Status|Todo|Hypothesis\" crates/revdeck-core/src/memory crates/revdeck-db` finds first-class analysis memory models and persistence.",
+      "`rg \"finding_evidence|EvidenceRef|pre_export\" crates` confirms findings are evidence-linked and validated before export.",
+      "`rg \"Markdown|Json|Export\" crates/revdeck-core/src/export crates/revdeck-cli` confirms both required formats are implemented.",
+      "Tests prove re-index does not delete or orphan analyst-owned notes, tags, renames, statuses, findings, or evidence links.",
+      "JSON export includes stable ObjectRef values and Markdown export includes human-readable evidence context."
+    ]
+  },
+  "risks": [
+    "If annotations use view-local identifiers, re-indexing or renames will orphan evidence and reports.",
+    "Markdown-only export would be readable but too lossy for round-trip and future automation.",
+    "Findings without pre-export validation can silently omit evidence and undermine the product deliverable."
+  ]
+}

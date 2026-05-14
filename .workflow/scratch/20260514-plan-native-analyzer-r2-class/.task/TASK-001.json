@@ -1,0 +1,9 @@
+{
+  "id": "TASK-001",
+  "title": "Native Instruction Block CFG Schema",
+  "status": "completed",
+  "milestone": "M3N",
+  "files": ["crates/revdeck-db/migrations/", "crates/revdeck-db/src/repo.rs", "crates/revdeck-core/src/object.rs"],
+  "description": "Add first-class instruction, basic block and CFG edge storage without changing existing object compatibility.",
+  "acceptance": ["schema migration exists", "typed repo methods round-trip rows", "object refs are stable"]
+}

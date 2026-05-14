@@ -1,0 +1,20 @@
+{
+  "id": "TASK-006",
+  "title": "Docs And Verification",
+  "wave": 3,
+  "depends_on": ["TASK-005"],
+  "files": ["README.md", ".workflow/.csv-wave/20260513-execute-m2a-m2b-power-navigation-adapter-commit/"],
+  "convergence_criteria": [
+    "README documents Graph Lab, Command Deck, plugin commit, and run --commit",
+    "Full fmt, clippy, tests, and CLI smoke pass",
+    "Execution audit records M2A/M2B evidence"
+  ],
+  "verification": [
+    "cargo fmt --all -- --check",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "cargo test --workspace"
+  ],
+  "status": "completed",
+  "completed_at": "2026-05-13T22:45:00+08:00",
+  "execution_session": ".workflow/.csv-wave/20260513-execute-m2a-m2b-power-navigation-adapter-commit/context.md"
+}

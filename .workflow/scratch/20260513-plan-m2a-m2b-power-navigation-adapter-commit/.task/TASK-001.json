@@ -1,0 +1,16 @@
+{
+  "id": "TASK-001",
+  "title": "Expose Graph Lab Workspace Lens",
+  "wave": 1,
+  "depends_on": [],
+  "files": ["crates/revdeck-tui/src/lib.rs", "tests/tui/tests/tui_workspace.rs"],
+  "convergence_criteria": [
+    "WORKSPACE_LENSES includes NavigationLens::LocalGraph",
+    "A shortcut opens LocalGraph for the current selection",
+    "TUI tests cover Graph Lab navigation and rendering"
+  ],
+  "verification": ["cargo test -p revdeck-tui", "cargo test -p revdeck-tui-tests"],
+  "status": "completed",
+  "completed_at": "2026-05-13T22:45:00+08:00",
+  "execution_session": ".workflow/.csv-wave/20260513-execute-m2a-m2b-power-navigation-adapter-commit/context.md"
+}

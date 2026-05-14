@@ -1,0 +1,43 @@
+{
+  "id": "20260514-brainstorm-native-r2-class-revdeck",
+  "direction": "native_analyzer_only",
+  "features": [
+    {
+      "id": "N-001",
+      "name": "Instruction Store",
+      "priority": "P0",
+      "description": "Persist decoded or scanned instruction facts with address, size, bytes, mnemonic, operands, function and block linkage."
+    },
+    {
+      "id": "N-002",
+      "name": "Basic Block Store",
+      "priority": "P0",
+      "description": "Persist basic blocks, address ranges, function ownership, terminator classification and confidence."
+    },
+    {
+      "id": "N-003",
+      "name": "Native CFG Edges",
+      "priority": "P0",
+      "description": "Persist control-flow edges between basic blocks and expose them through object graph queries."
+    },
+    {
+      "id": "N-004",
+      "name": "Instruction-Driven Xrefs",
+      "priority": "P1",
+      "description": "Use decoded immediates, relocation hints and import thunks to generate code/data/import references."
+    },
+    {
+      "id": "N-005",
+      "name": "Graph Lab CFG Mode",
+      "priority": "P1",
+      "description": "Add explicit CFG/callgraph/xref graph modes to the TUI."
+    },
+    {
+      "id": "N-006",
+      "name": "Native Analyzer Capability Matrix",
+      "priority": "P1",
+      "description": "Track architecture support, confidence levels, unsupported features and diagnostics in project metadata."
+    }
+  ]
+}
+

@@ -1,0 +1,71 @@
+{
+  "id": "TASK-004",
+  "title": "Function Radar Structured Scoring And Triage View Models",
+  "summary": "Implement deterministic Function Radar scoring, structured reason records linked to evidence ObjectRefs, boundary_confidence visibility, stable sort/filter behavior, and reusable Overview/Radar/Inspector view models.",
+  "wave": 3,
+  "depends_on": [
+    "TASK-002",
+    "TASK-003"
+  ],
+  "read_first": [
+    ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-002.json",
+    ".workflow/scratch/20260513-revdeck-v01-binary-triage/.task/TASK-003.json",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E2-analysis.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E3-analysis.md",
+    ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage/E4-analysis.md"
+  ],
+  "files": [
+    {
+      "path": "crates/revdeck-core/src/radar/**",
+      "purpose": "Scoring signals, score aggregation, reason model, deterministic ranking, filters."
+    },
+    {
+      "path": "crates/revdeck-core/src/view_models/**",
+      "purpose": "Overview, Function Radar, and inspector view models independent of Ratatui rendering."
+    },
+    {
+      "path": "crates/revdeck-db/**",
+      "purpose": "Repositories for scores, score_reasons, function summaries, evidence joins."
+    },
+    {
+      "path": "crates/revdeck-index/**",
+      "purpose": "Hooks to trigger scoring as an analyzer after indexing completes."
+    },
+    {
+      "path": "tests/radar/**",
+      "purpose": "Scoring signal, reason evidence, tie-breaker, and fixture ranking tests."
+    }
+  ],
+  "actions": [
+    "Create a score reason schema with signal key, contribution/weight, display label, matched evidence ObjectRefs, source analysis_run, and deterministic metadata.",
+    "Implement initial signals for dangerous imports, sensitive strings, xref/call counts, function size/span, entrypoint proximity, boundary_confidence/source, and analyst tags as a separate optional signal.",
+    "Persist score_reasons as structured rows/JSON rather than formatted text; make every visible non-zero score explainable.",
+    "Sort Function Radar rows by score descending, then deterministic tie-breakers such as artifact id, normalized address, and stable object key.",
+    "Expose reason-to-object navigation so a user can jump from a score reason to the specific string/import/xref that caused it.",
+    "Build Overview and Function Radar view models with counts, top functions, status, reasons, tags/status columns, and degraded indexing warnings.",
+    "Show boundary_confidence and source in function summaries and inspector view model so heuristic functions are not presented as exact.",
+    "Add scoring analyzer run records and ensure rerunning scoring updates score facts without deleting analyst-owned memory."
+  ],
+  "tests": [
+    "cargo test -p revdeck-core radar_signal_dangerous_imports",
+    "cargo test -p revdeck-core radar_signal_sensitive_strings",
+    "cargo test -p revdeck-core radar_reason_object_refs",
+    "cargo test -p revdeck-core radar_stable_sort",
+    "cargo test -p revdeck-index scoring_analyzer_run",
+    "cargo test --workspace"
+  ],
+  "convergence": {
+    "criteria": [
+      "`rg \"ScoreReason|reason_code|evidence_refs|contribution\" crates` confirms structured score reasons exist.",
+      "`rg \"boundary_confidence\" crates/revdeck-core/src/radar crates/revdeck-core/src/view_models` confirms confidence is visible in scoring/view models.",
+      "`rg \"dangerous|sensitive|entrypoint|tag\" crates/revdeck-core/src/radar` confirms required v0.1 scoring signals exist.",
+      "Fixture tests assert score ordering, reason labels, contribution values, and stable tie-breakers.",
+      "No Function Radar row with a non-zero score can render from a view model with an empty reason list."
+    ]
+  },
+  "risks": [
+    "A score without structured evidence cannot be tested, navigated, or defended in findings.",
+    "Non-deterministic iteration over maps or SQL results can reorder Radar rows and destabilize tests/reports.",
+    "User tag influence must be explicit so analysis memory changes do not silently rewrite objective indexing evidence."
+  ]
+}

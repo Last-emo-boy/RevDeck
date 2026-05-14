@@ -1,0 +1,121 @@
+{
+  "topic": "RevDeck next powerful features and TUI optimization",
+  "session": "20260513-brainstorm-next-power-tui",
+  "strategy": "Build user-visible TUI power navigation first, then connect it to real adapter execution and host-mediated plugin commits.",
+  "features": [
+    {
+      "id": "F-001",
+      "slug": "graph-lab-and-evidence-paths",
+      "priority": "P0",
+      "status": "ready-for-plan",
+      "owners": ["ui-designer", "system-architect", "ux-expert"],
+      "depends_on": [],
+      "summary": "Promote local relations into a first-class Graph Lab lens with current-object subgraphs, xref filters, relation direction, evidence paths, and jumpable rows."
+    },
+    {
+      "id": "F-002",
+      "slug": "adapter-runner-and-objectbatch-commit",
+      "priority": "P0",
+      "status": "ready-for-plan",
+      "owners": ["system-architect", "test-strategist"],
+      "depends_on": ["M1-plugin-sdk-preview"],
+      "summary": "Run local adapter plugins through the host, validate output, commit ObjectBatch facts transactionally, and record plugin contributions with provenance."
+    },
+    {
+      "id": "F-003",
+      "slug": "command-deck-and-fuzzy-object-search",
+      "priority": "P0",
+      "status": "ready-for-plan",
+      "owners": ["ui-designer", "ux-expert", "test-strategist"],
+      "depends_on": [],
+      "summary": "Add an overlay palette for commands, object search, recent targets, help, and mutation previews so users do not need to memorize command syntax."
+    },
+    {
+      "id": "F-004",
+      "slug": "binary-map-2-format-entropy-packer-diagnostics",
+      "priority": "P1",
+      "status": "plan-with-tui-m2a",
+      "owners": ["subject-matter-expert", "ui-designer", "test-strategist"],
+      "depends_on": [],
+      "summary": "Expand Binary Map with PE/ELF format details, sections, entropy signals, import grouping, resources, parse warnings, and packed/unknown-file guidance."
+    },
+    {
+      "id": "F-005",
+      "slug": "triage-queue-and-finding-promotion",
+      "priority": "P1",
+      "status": "plan-with-tui-m2a",
+      "owners": ["product-manager", "ux-expert"],
+      "depends_on": ["F-001"],
+      "summary": "Turn radar leads, warnings, weak boundaries, and finding gaps into a review queue with states and one-step promotion into findings with evidence."
+    },
+    {
+      "id": "F-006",
+      "slug": "rule-pack-sdk-and-scoring-controls",
+      "priority": "P1",
+      "status": "defer-until-commit-provenance",
+      "owners": ["system-architect", "test-strategist"],
+      "depends_on": ["F-002"],
+      "summary": "Let first-party or plugin rule packs emit explainable score reasons, confidence, suppressions, thresholds, and deterministic merge behavior."
+    },
+    {
+      "id": "F-007",
+      "slug": "first-party-adapter-proof-pack",
+      "priority": "P1",
+      "status": "plan-with-sdk-m2b",
+      "owners": ["subject-matter-expert", "system-architect"],
+      "depends_on": ["F-002"],
+      "summary": "Ship fixture-backed adapters for Ghidra/rizin JSON export, trace JSONL, ASAN/panic crash logs, and binwalk-style firmware trees."
+    },
+    {
+      "id": "F-008",
+      "slug": "tui-performance-layout-and-visual-polish",
+      "priority": "P0",
+      "status": "ready-for-plan",
+      "owners": ["ui-designer", "test-strategist"],
+      "depends_on": [],
+      "summary": "Improve layout density, status chips, breadcrumbs, no-data panels, large-list paging, stable rendering, and small-terminal behavior."
+    }
+  ],
+  "recommended_roadmap": [
+    {
+      "milestone": "M2A TUI Power Navigation",
+      "features": ["F-001", "F-003", "F-004", "F-005", "F-008"],
+      "exit_criteria": [
+        "Graph Lab is a first-class workspace lens",
+        "Command Deck can search commands and objects with previews",
+        "Binary Map shows useful parse and packer diagnostics",
+        "Triage items can be reviewed and promoted into findings",
+        "TUI render/reducer tests cover desktop and small terminal layouts"
+      ]
+    },
+    {
+      "milestone": "M2B Adapter Commit Pipeline",
+      "features": ["F-002", "F-007"],
+      "exit_criteria": [
+        "Local adapter runner records audited plugin runs",
+        "Validated ObjectBatch output commits transactionally",
+        "Plugin contributions are queryable and reversible or hideable by source",
+        "At least one first-party adapter fixture imports external evidence"
+      ]
+    },
+    {
+      "milestone": "M3 Triage Intelligence",
+      "features": ["F-006"],
+      "exit_criteria": [
+        "Rule packs emit structured score reasons",
+        "Users can suppress noisy reasons",
+        "Scoring replay is deterministic across fixtures"
+      ]
+    }
+  ],
+  "quality_gate": {
+    "unresolved_conflicts": 0,
+    "confidence": {
+      "role_coverage": 0.92,
+      "cross_role_consistency": 0.9,
+      "implementation_feasibility": 0.84,
+      "user_value": 0.9,
+      "overall": 0.89
+    }
+  }
+}

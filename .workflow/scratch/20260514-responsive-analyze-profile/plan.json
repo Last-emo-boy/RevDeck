@@ -1,0 +1,34 @@
+{
+  "title": "P0 Responsive Analyze Profile",
+  "status": "completed",
+  "tasks": [
+    {
+      "id": "P0-1",
+      "title": "Index profile API",
+      "status": "completed",
+      "files": ["crates/revdeck-index/src/lib.rs"],
+      "convergence_criteria": ["AnalysisProfile is public", "ImportOptions carries profile with balanced default"]
+    },
+    {
+      "id": "P0-2",
+      "title": "Quick profile behavior",
+      "status": "completed",
+      "files": ["crates/revdeck-index/src/lib.rs"],
+      "convergence_criteria": ["quick skips native CFG/instructions", "diagnostic code pass_skipped_by_profile is recorded"]
+    },
+    {
+      "id": "P0-3",
+      "title": "CLI and docs",
+      "status": "completed",
+      "files": ["crates/revdeck-cli/src/main.rs", "README.md"],
+      "convergence_criteria": ["analyze/import accept --profile", "JSON output contains profile", "README documents quick/balanced/deep"]
+    },
+    {
+      "id": "P0-4",
+      "title": "Verification",
+      "status": "completed",
+      "files": ["crates/revdeck-index/src/lib.rs", "tests"],
+      "convergence_criteria": ["focused tests pass", "cargo fmt/clippy/test pass or gaps documented"]
+    }
+  ]
+}

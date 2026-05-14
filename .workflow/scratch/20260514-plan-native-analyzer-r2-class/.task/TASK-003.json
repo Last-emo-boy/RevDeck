@@ -1,0 +1,9 @@
+{
+  "id": "TASK-003",
+  "title": "CFG Evidence Edges",
+  "status": "completed",
+  "milestone": "M3N",
+  "files": ["crates/revdeck-index/src/lib.rs", "crates/revdeck-core/src/query/"],
+  "description": "Connect artifact/function/basic block/instruction facts into the existing object graph.",
+  "acceptance": ["contains edges link function -> block -> instruction", "cfg edges are queryable"]
+}
