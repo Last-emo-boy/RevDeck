@@ -1,11 +1,17 @@
 use revdeck_core::{
-    AnalysisRun, AnalysisRunStatus, Annotation, AnnotationEvidence, AnnotationKind, EdgeKind,
-    ExportContext, Finding, FindingEvidence, FindingSeverity, FindingStatus, FunctionScore,
-    FunctionScoreInput, NewAnalysisRun, ObjectKind, ObjectRef, RadarEvidence, Report, ScoreReason,
-    StableObjectKey, FUNCTION_RADAR_SCORE_KIND,
+    AnalysisRun, AnalysisRunStatus, Annotation, AnnotationEvidence, AnnotationKind, ArtifactFormat,
+    ArtifactKind, DiffSummaryViewModel, EdgeKind, ExportAnalysisJob, ExportContext,
+    ExportPluginRun, Finding, FindingEvidence, FindingSeverity, FindingStatus, FunctionScore,
+    FunctionScoreInput, ImportStatus, NewAnalysisRun, ObjectKind, ObjectRef, RadarEvidence, Report,
+    ScoreReason, StableObjectKey, FUNCTION_RADAR_SCORE_KIND,
 };
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::{BTreeMap, BTreeSet};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Path, PathBuf},
+};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +53,22 @@ pub struct AnalysisRunRepository<'conn> {
 }
 
 pub struct AnalysisJobRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+pub struct TraceRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+pub struct FirmwareRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+pub struct CrashRepository<'conn> {
+    connection: &'conn Connection,
+}
+
+pub struct ProtocolRepository<'conn> {
     connection: &'conn Connection,
 }
 
@@ -143,6 +165,265 @@ pub struct AnalysisJobUpdate {
     pub diagnostics_count: u64,
     pub metadata_json: String,
     pub finished_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceSessionRecord {
+    pub object_ref: ObjectRef,
+    pub artifact: ObjectRef,
+    pub session_id: String,
+    pub label: String,
+    pub source_path: String,
+    pub event_count: u64,
+    pub thread_count: u64,
+    pub diagnostics: Vec<String>,
+    pub imported_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceEventRecord {
+    pub object_ref: ObjectRef,
+    pub session: ObjectRef,
+    pub artifact: ObjectRef,
+    pub event_index: u64,
+    pub event_id: String,
+    pub thread_id: String,
+    pub event_kind: String,
+    pub timestamp_ns: Option<u64>,
+    pub function_name: Option<String>,
+    pub address: Option<u64>,
+    pub message: String,
+    pub correlated: Option<ObjectRef>,
+    pub raw_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceImportOutcome {
+    pub session: ObjectRef,
+    pub events_imported: u64,
+    pub correlated_events: u64,
+    pub malformed_lines: u64,
+    pub diagnostics: Vec<String>,
+    pub threads: Vec<String>,
+    pub analysis_job_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirmwareFileRecord {
+    pub object_ref: ObjectRef,
+    pub firmware_artifact: ObjectRef,
+    pub path: String,
+    pub parent_path: Option<String>,
+    pub size: u64,
+    pub sha256: String,
+    pub file_type: String,
+    pub executable: bool,
+    pub nested_artifact: Option<ObjectRef>,
+    pub imported_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FirmwareImportOutcome {
+    pub firmware: ObjectRef,
+    pub files_imported: u64,
+    pub binaries_detected: u64,
+    pub unsupported_files: u64,
+    pub total_bytes: u64,
+    pub analysis_job_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrashReportRecord {
+    pub object_ref: ObjectRef,
+    pub artifact: ObjectRef,
+    pub crash_id: String,
+    pub label: String,
+    pub source_path: String,
+    pub sanitizer: String,
+    pub crash_class: String,
+    pub signal: Option<String>,
+    pub message: String,
+    pub signature: String,
+    pub frame_count: u64,
+    pub correlated_frame_count: u64,
+    pub diagnostics: Vec<String>,
+    pub imported_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrashFrameRecord {
+    pub object_ref: ObjectRef,
+    pub report: ObjectRef,
+    pub artifact: ObjectRef,
+    pub frame_index: u64,
+    pub module: Option<String>,
+    pub function_name: Option<String>,
+    pub address: Option<u64>,
+    pub offset: Option<u64>,
+    pub source_location: Option<String>,
+    pub confidence: String,
+    pub correlated: Option<ObjectRef>,
+    pub raw_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrashImportOutcome {
+    pub report: ObjectRef,
+    pub frames_imported: u64,
+    pub correlated_frames: u64,
+    pub clustered_reports: u64,
+    pub findings_created: u64,
+    pub signature: String,
+    pub diagnostics: Vec<String>,
+    pub analysis_job_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolSampleRecord {
+    pub object_ref: ObjectRef,
+    pub artifact: ObjectRef,
+    pub sample_id: String,
+    pub label: String,
+    pub source_path: String,
+    pub schema_hypothesis: Option<String>,
+    pub message_count: u64,
+    pub field_count: u64,
+    pub diagnostics: Vec<String>,
+    pub imported_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolMessageRecord {
+    pub object_ref: ObjectRef,
+    pub sample: ObjectRef,
+    pub artifact: ObjectRef,
+    pub message_index: u64,
+    pub message_id: String,
+    pub direction: String,
+    pub payload_len: u64,
+    pub field_count: u64,
+    pub schema_hypothesis: Option<String>,
+    pub raw_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProtocolFieldRecord {
+    pub object_ref: ObjectRef,
+    pub message: ObjectRef,
+    pub sample: ObjectRef,
+    pub artifact: ObjectRef,
+    pub field_index: u64,
+    pub name: String,
+    pub byte_offset: u64,
+    pub byte_length: u64,
+    pub field_type: String,
+    pub confidence: String,
+    pub entropy: f64,
+    pub printable_ratio: f64,
+    pub integer_value: Option<u64>,
+    pub string_hint: Option<String>,
+    pub correlated: Option<ObjectRef>,
+    pub raw_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolImportOutcome {
+    pub sample: ObjectRef,
+    pub messages_imported: u64,
+    pub fields_imported: u64,
+    pub correlated_fields: u64,
+    pub diagnostics: Vec<String>,
+    pub schema_hypothesis: Option<String>,
+    pub analysis_job_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedTraceEvent {
+    event_index: u64,
+    event_id: String,
+    thread_id: String,
+    event_kind: String,
+    timestamp_ns: Option<u64>,
+    function_name: Option<String>,
+    address: Option<u64>,
+    message: String,
+    correlated: Option<ObjectRef>,
+    raw_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedFirmwareFile {
+    source_path: PathBuf,
+    relative_path: String,
+    parent_path: Option<String>,
+    size: u64,
+    sha256: String,
+    file_type: String,
+    executable: bool,
+    nested_artifact: Option<ObjectRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedCrashReport {
+    crash_id: String,
+    label: String,
+    sanitizer: String,
+    crash_class: String,
+    signal: Option<String>,
+    message: String,
+    signature: String,
+    diagnostics: Vec<String>,
+    frames: Vec<ParsedCrashFrame>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedCrashFrame {
+    frame_index: u64,
+    module: Option<String>,
+    function_name: Option<String>,
+    address: Option<u64>,
+    offset: Option<u64>,
+    source_location: Option<String>,
+    confidence: String,
+    correlated: Option<ObjectRef>,
+    raw_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ParsedProtocolSample {
+    sample_id: String,
+    label: String,
+    schema_hypothesis: Option<String>,
+    diagnostics: Vec<String>,
+    messages: Vec<ParsedProtocolMessage>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ParsedProtocolMessage {
+    message_index: u64,
+    message_id: String,
+    direction: String,
+    payload: Vec<u8>,
+    schema_hypothesis: Option<String>,
+    fields: Vec<ParsedProtocolField>,
+    raw_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ParsedProtocolField {
+    field_index: u64,
+    name: String,
+    byte_offset: u64,
+    byte_length: u64,
+    field_type: String,
+    confidence: String,
+    value_hex: String,
+    entropy: f64,
+    printable_ratio: f64,
+    integer_value: Option<u64>,
+    string_hint: Option<String>,
+    correlated: Option<ObjectRef>,
+    raw_json: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -435,6 +716,124 @@ impl<'conn> ObjectRepository<'conn> {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn upsert_diff_rows(
+        &self,
+        artifact: &ObjectRef,
+        summary: &DiffSummaryViewModel,
+    ) -> rusqlite::Result<()> {
+        for row in &summary.rows {
+            let metadata_json = serde_json::to_string(&serde_json::json!({
+                "lab_id": "diff",
+                "change": row.change.as_str(),
+                "entity_kind": row.entity_kind.as_str(),
+                "match_key": &row.match_key,
+                "before": row.before.as_ref().map(ToString::to_string),
+                "after": row.after.as_ref().map(ToString::to_string),
+                "before_label": row.before_label.as_deref(),
+                "after_label": row.after_label.as_deref(),
+                "command_previews": &row.command_previews
+            }))
+            .map_err(json_to_sql_error)?;
+            self.upsert_object(&StoredObject {
+                object_ref: row.delta_ref.clone(),
+                artifact_key: Some(artifact.key.to_string()),
+                display_name: Some(row.title.clone()),
+                address: None,
+                size: None,
+                source_run_id: None,
+                metadata_json,
+            })?;
+
+            if let Some(before) = &row.before {
+                self.ensure_diff_reference_object(before, artifact)?;
+                self.upsert_diff_reference_edge(&row.delta_ref, before, "before")?;
+            }
+            if let Some(after) = &row.after {
+                self.ensure_diff_reference_object(after, artifact)?;
+                self.upsert_diff_reference_edge(&row.delta_ref, after, "after")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_diff_reference_object(
+        &self,
+        object_ref: &ObjectRef,
+        artifact: &ObjectRef,
+    ) -> rusqlite::Result<()> {
+        let exists: bool = self.connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM objects WHERE object_key = ?1 AND kind = ?2
+            )",
+            params![object_ref.key.as_str(), object_ref.kind.as_str()],
+            |row| row.get(0),
+        )?;
+        if exists || object_ref.kind != ObjectKind::Edge {
+            return Ok(());
+        }
+
+        let edge_label = self
+            .connection
+            .query_row(
+                "SELECT e.kind || ' ' || src.kind || ':' || e.src_object_key
+                    || ' -> ' || dst.kind || ':' || e.dst_object_key
+                FROM edges e
+                JOIN objects src ON src.object_key = e.src_object_key
+                JOIN objects dst ON dst.object_key = e.dst_object_key
+                WHERE e.edge_key = ?1
+                LIMIT 1",
+                [object_ref.key.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| object_ref.key.as_str().to_string());
+        self.upsert_object(&StoredObject {
+            object_ref: object_ref.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some(edge_label),
+            address: None,
+            size: None,
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "diff",
+                "mirror_kind": "edge",
+                "edge_key": object_ref.key.as_str()
+            })
+            .to_string(),
+        })
+    }
+
+    fn upsert_diff_reference_edge(
+        &self,
+        delta_ref: &ObjectRef,
+        target_ref: &ObjectRef,
+        side: &str,
+    ) -> rusqlite::Result<()> {
+        let edge_ref = ObjectRef::new(
+            ObjectKind::Edge,
+            StableObjectKey::new(format!(
+                "edge/edge_kind=differs_from/source={}/target={}/side={}",
+                sanitize_key_component(delta_ref.key.as_str()),
+                sanitize_key_component(target_ref.key.as_str()),
+                side
+            ))
+            .map_err(from_core_error)?,
+        );
+        self.upsert_edge(&StoredEdge {
+            edge_ref,
+            source: delta_ref.clone(),
+            target: target_ref.clone(),
+            kind: EdgeKind::DiffersFrom,
+            confidence: 1.0,
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "diff",
+                "side": side
+            })
+            .to_string(),
+        })
     }
 
     pub fn edge_count_for_artifact(&self, artifact_key: &str) -> rusqlite::Result<u64> {
@@ -1214,13 +1613,43 @@ impl<'conn> FindingRepository<'conn> {
                 }
             }
         }
-        Ok(ExportContext {
-            report: Report {
+        let mut context = ExportContext::new(
+            Report {
                 generated_at,
                 findings,
             },
             evidence_objects,
-        })
+        );
+
+        let analysis_jobs = AnalysisJobRepository::new(self.connection);
+        let mut seen_jobs = BTreeSet::new();
+        for artifact_key in export_artifact_keys(&context.evidence_objects) {
+            for job in analysis_jobs.list_recent_by_artifact_key(&artifact_key, 20)? {
+                if seen_jobs.insert(job.id) {
+                    context.analysis_jobs.push(export_analysis_job(job));
+                }
+            }
+        }
+
+        let plugin_runs = PluginRunRepository::new(self.connection);
+        let mut seen_plugin_runs = BTreeSet::new();
+        for object in &context.evidence_objects {
+            if let Some(plugin_run_id) = metadata_plugin_run_id(&object.metadata_json) {
+                if seen_plugin_runs.insert(plugin_run_id) {
+                    if let Some(run) = plugin_runs.get(plugin_run_id)? {
+                        context.plugin_runs.push(export_plugin_run(run));
+                    }
+                }
+            }
+        }
+        for run in plugin_runs.list_recent(50)? {
+            if seen_plugin_runs.insert(run.id) {
+                context.plugin_runs.push(export_plugin_run(run));
+            }
+        }
+
+        context.refresh_lab_summaries();
+        Ok(context)
     }
 
     fn list_evidence(&self, finding: &ObjectRef) -> rusqlite::Result<Vec<FindingEvidence>> {
@@ -1870,6 +2299,36 @@ impl<'conn> AnalysisJobRepository<'conn> {
         Ok(records)
     }
 
+    pub fn list_recent_for_artifact(
+        &self,
+        artifact: &ObjectRef,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<AnalysisJobRecord>> {
+        self.list_recent_by_artifact_key(artifact.key.as_str(), limit)
+    }
+
+    pub fn list_recent_by_artifact_key(
+        &self,
+        artifact_key: &str,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<AnalysisJobRecord>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT id, analysis_run_id, artifact_key, pass_name, profile, status,
+                progress_current, progress_total, objects_produced, diagnostics_count,
+                byte_limit, function_limit, time_limit_ms, metadata_json,
+                started_at, finished_at, updated_at
+            FROM analysis_jobs
+            WHERE artifact_key = ?1
+            ORDER BY started_at DESC, id DESC
+            LIMIT ?2",
+        )?;
+        let records = statement
+            .query_map(params![artifact_key, limit], Self::record_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(records)
+    }
+
     pub fn get(&self, id: i64) -> rusqlite::Result<Option<AnalysisJobRecord>> {
         self.connection
             .query_row(
@@ -1907,6 +2366,2050 @@ impl<'conn> AnalysisJobRepository<'conn> {
             started_at: parse_time(&started_at)?,
             finished_at: finished_at.as_deref().map(parse_time).transpose()?,
             updated_at: parse_time(&updated_at)?,
+        })
+    }
+}
+
+impl<'conn> FirmwareRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn import_directory(
+        &self,
+        firmware_dir: &Path,
+        imported_at: OffsetDateTime,
+    ) -> rusqlite::Result<FirmwareImportOutcome> {
+        let files = collect_firmware_files(firmware_dir)?;
+        let digest = firmware_digest(&files);
+        let source_path = firmware_dir.display().to_string();
+        let display_name = firmware_dir
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("firmware")
+            .to_string();
+        let firmware = ObjectRef::artifact(&digest, &source_path).map_err(from_core_error)?;
+        let total_bytes = files.iter().map(|file| file.size).sum::<u64>();
+        let binaries_detected = files
+            .iter()
+            .filter(|file| file.nested_artifact.is_some())
+            .count() as u64;
+        let unsupported_files = files
+            .iter()
+            .filter(|file| file.nested_artifact.is_none())
+            .count() as u64;
+
+        ArtifactRepository::new(self.connection).upsert_artifact(&ArtifactRecord {
+            object_ref: firmware.clone(),
+            display_name: display_name.clone(),
+            source_path: source_path.clone(),
+            stored_path: None,
+            sha256: digest.clone(),
+            size: total_bytes,
+            kind: ArtifactKind::Firmware.as_str().to_string(),
+            format: ArtifactFormat::Unknown.as_str().to_string(),
+            architecture: "mixed".to_string(),
+            import_status: ImportStatus::Indexed.as_str().to_string(),
+            created_at: imported_at,
+        })?;
+        let object_repo = ObjectRepository::new(self.connection);
+        object_repo.upsert_object(&StoredObject {
+            object_ref: firmware.clone(),
+            artifact_key: None,
+            display_name: Some(display_name),
+            address: None,
+            size: Some(total_bytes),
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "firmware",
+                "source_path": source_path,
+                "file_count": files.len(),
+                "binary_count": binaries_detected,
+                "unsupported_files": unsupported_files,
+                "total_bytes": total_bytes,
+                "command_previews": [
+                    format!(":open {firmware}"),
+                    format!(":xrefs {firmware}")
+                ]
+            })
+            .to_string(),
+        })?;
+
+        for file in &files {
+            self.upsert_firmware_file(&firmware, file, imported_at)?;
+        }
+
+        let job = AnalysisJobRepository::new(self.connection).insert(&NewAnalysisJob {
+            analysis_run_id: None,
+            artifact_key: Some(firmware.key.to_string()),
+            pass_name: "firmware.import".to_string(),
+            profile: "firmware".to_string(),
+            status: "succeeded".to_string(),
+            progress_current: files.len() as u64,
+            progress_total: Some(files.len() as u64),
+            objects_produced: files.len() as u64 + binaries_detected + 1,
+            diagnostics_count: 0,
+            byte_limit: None,
+            function_limit: None,
+            time_limit_ms: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "firmware",
+                "pass_name": "firmware.import",
+                "pass_phase": "import",
+                "firmware": firmware.to_string(),
+                "source_path": firmware_dir.display().to_string(),
+                "files_imported": files.len(),
+                "binaries_detected": binaries_detected,
+                "unsupported_files": unsupported_files,
+                "total_bytes": total_bytes,
+                "parameters": {
+                    "mode": "directory"
+                },
+                "log_snippets": [
+                    format!("Firmware Lab imported {} files", files.len()),
+                    format!("detected {} nested binaries", binaries_detected)
+                ]
+            })
+            .to_string(),
+            started_at: imported_at,
+        })?;
+
+        Ok(FirmwareImportOutcome {
+            firmware,
+            files_imported: files.len() as u64,
+            binaries_detected,
+            unsupported_files,
+            total_bytes,
+            analysis_job_id: job.id,
+        })
+    }
+
+    pub fn list_files_for_artifact(
+        &self,
+        firmware: &ObjectRef,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<FirmwareFileRecord>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT ff.object_key, ff.firmware_artifact_key, ff.path, ff.parent_path,
+                ff.size, ff.sha256, ff.file_type, ff.executable,
+                ff.nested_artifact_key, nested.kind, ff.imported_at
+            FROM firmware_files ff
+            LEFT JOIN objects nested ON nested.object_key = ff.nested_artifact_key
+            WHERE ff.firmware_artifact_key = ?1
+            ORDER BY ff.path
+            LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![firmware.key.as_str(), limit], |row| {
+            Self::firmware_file_from_row(row)
+        })?;
+        rows.collect()
+    }
+
+    fn upsert_firmware_file(
+        &self,
+        firmware: &ObjectRef,
+        file: &ParsedFirmwareFile,
+        imported_at: OffsetDateTime,
+    ) -> rusqlite::Result<()> {
+        let file_ref = ObjectRef::lab_object(
+            ObjectKind::FirmwareFile,
+            Some(&firmware.key),
+            "firmware",
+            &format!("file/{}", file.relative_path),
+        )
+        .map_err(from_core_error)?;
+        let object_repo = ObjectRepository::new(self.connection);
+
+        if let Some(nested_artifact) = &file.nested_artifact {
+            ArtifactRepository::new(self.connection).upsert_artifact(&ArtifactRecord {
+                object_ref: nested_artifact.clone(),
+                display_name: file.relative_path.clone(),
+                source_path: file.source_path.display().to_string(),
+                stored_path: None,
+                sha256: file.sha256.clone(),
+                size: file.size,
+                kind: ArtifactKind::Binary.as_str().to_string(),
+                format: file.file_type.clone(),
+                architecture: "unknown".to_string(),
+                import_status: ImportStatus::Pending.as_str().to_string(),
+                created_at: imported_at,
+            })?;
+            object_repo.upsert_object(&StoredObject {
+                object_ref: nested_artifact.clone(),
+                artifact_key: Some(firmware.key.to_string()),
+                display_name: Some(file.relative_path.clone()),
+                address: None,
+                size: Some(file.size),
+                source_run_id: None,
+                metadata_json: serde_json::json!({
+                    "lab_id": "firmware",
+                    "parent_artifact": firmware.to_string(),
+                    "source_file": file_ref.to_string(),
+                    "path": file.relative_path,
+                    "sha256": file.sha256,
+                    "file_type": file.file_type
+                })
+                .to_string(),
+            })?;
+        }
+
+        object_repo.upsert_object(&StoredObject {
+            object_ref: file_ref.clone(),
+            artifact_key: Some(firmware.key.to_string()),
+            display_name: Some(file.relative_path.clone()),
+            address: None,
+            size: Some(file.size),
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "firmware",
+                "firmware": firmware.to_string(),
+                "path": file.relative_path,
+                "parent_path": file.parent_path,
+                "source_path": file.source_path.display().to_string(),
+                "sha256": file.sha256,
+                "size": file.size,
+                "file_type": file.file_type,
+                "executable": file.executable,
+                "nested_artifact": file.nested_artifact.as_ref().map(ToString::to_string),
+                "command_previews": [
+                    format!(":open {file_ref}"),
+                    format!(":finding link <finding> {file_ref} evidence")
+                ]
+            })
+            .to_string(),
+        })?;
+        self.connection.execute(
+            "INSERT INTO firmware_files (
+                object_key, firmware_artifact_key, path, parent_path, size, sha256,
+                file_type, executable, nested_artifact_key, imported_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ON CONFLICT(object_key) DO UPDATE SET
+                firmware_artifact_key = excluded.firmware_artifact_key,
+                path = excluded.path,
+                parent_path = excluded.parent_path,
+                size = excluded.size,
+                sha256 = excluded.sha256,
+                file_type = excluded.file_type,
+                executable = excluded.executable,
+                nested_artifact_key = excluded.nested_artifact_key,
+                imported_at = excluded.imported_at",
+            params![
+                file_ref.key.as_str(),
+                firmware.key.as_str(),
+                file.relative_path,
+                file.parent_path.as_deref(),
+                to_i64(file.size),
+                file.sha256,
+                file.file_type,
+                file.executable,
+                file.nested_artifact
+                    .as_ref()
+                    .map(|artifact| artifact.key.as_str()),
+                format_time(imported_at)?,
+            ],
+        )?;
+        object_repo.upsert_edge(&StoredEdge {
+            edge_ref: ObjectRef::new(
+                ObjectKind::Edge,
+                StableObjectKey::edge(EdgeKind::Contains, firmware, &file_ref)
+                    .map_err(from_core_error)?,
+            ),
+            source: firmware.clone(),
+            target: file_ref.clone(),
+            kind: EdgeKind::Contains,
+            confidence: 1.0,
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "firmware",
+                "path": file.relative_path,
+                "file_type": file.file_type
+            })
+            .to_string(),
+        })?;
+        if let Some(nested_artifact) = &file.nested_artifact {
+            object_repo.upsert_edge(&StoredEdge {
+                edge_ref: ObjectRef::new(
+                    ObjectKind::Edge,
+                    StableObjectKey::edge(EdgeKind::DerivedFrom, nested_artifact, &file_ref)
+                        .map_err(from_core_error)?,
+                ),
+                source: nested_artifact.clone(),
+                target: file_ref,
+                kind: EdgeKind::DerivedFrom,
+                confidence: 1.0,
+                source_run_id: None,
+                metadata_json: serde_json::json!({
+                    "lab_id": "firmware",
+                    "path": file.relative_path,
+                    "sha256": file.sha256
+                })
+                .to_string(),
+            })?;
+        }
+        Ok(())
+    }
+
+    fn firmware_file_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FirmwareFileRecord> {
+        let object_key: String = row.get(0)?;
+        let firmware_key: String = row.get(1)?;
+        let nested_key: Option<String> = row.get(8)?;
+        let nested_kind: Option<String> = row.get(9)?;
+        let imported_at: String = row.get(10)?;
+        Ok(FirmwareFileRecord {
+            object_ref: ObjectRef::new(
+                ObjectKind::FirmwareFile,
+                object_key.parse().map_err(from_core_error)?,
+            ),
+            firmware_artifact: ObjectRef::new(
+                ObjectKind::Artifact,
+                firmware_key.parse().map_err(from_core_error)?,
+            ),
+            path: row.get(2)?,
+            parent_path: row.get(3)?,
+            size: from_i64(row.get(4)?),
+            sha256: row.get(5)?,
+            file_type: row.get(6)?,
+            executable: row.get(7)?,
+            nested_artifact: if let (Some(key), Some(kind)) = (nested_key, nested_kind) {
+                Some(ObjectRef::new(
+                    kind.parse().map_err(from_core_error)?,
+                    key.parse().map_err(from_core_error)?,
+                ))
+            } else {
+                None
+            },
+            imported_at: parse_time(&imported_at)?,
+        })
+    }
+}
+
+impl<'conn> TraceRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn import_jsonl(
+        &self,
+        artifact: &ObjectRef,
+        source_path: &str,
+        jsonl: &str,
+        imported_at: OffsetDateTime,
+    ) -> rusqlite::Result<TraceImportOutcome> {
+        let mut session_id = derive_trace_session_id(source_path);
+        let mut label = session_id.clone();
+        let mut diagnostics = Vec::new();
+        let mut malformed_lines = 0u64;
+        let mut events = Vec::new();
+
+        for (line_index, line) in jsonl.lines().enumerate() {
+            let line_number = line_index + 1;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let value = match serde_json::from_str::<serde_json::Value>(trimmed) {
+                Ok(value) => value,
+                Err(err) => {
+                    malformed_lines += 1;
+                    diagnostics.push(format!("line {line_number}: invalid JSONL: {err}"));
+                    continue;
+                }
+            };
+            let record_type = value
+                .get("type")
+                .or_else(|| value.get("record_type"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("event");
+            if record_type == "session" {
+                if let Some(value) = trace_string(&value, &["session_id", "id", "name"]) {
+                    session_id = value;
+                }
+                if let Some(value) = trace_string(&value, &["label", "display_name"]) {
+                    label = value;
+                } else {
+                    label = session_id.clone();
+                }
+                continue;
+            }
+
+            if record_type != "event" {
+                malformed_lines += 1;
+                diagnostics.push(format!(
+                    "line {line_number}: unsupported trace record `{record_type}`"
+                ));
+                continue;
+            }
+
+            let event_index = events.len() as u64;
+            let event_id = trace_string(&value, &["event_id", "id"])
+                .unwrap_or_else(|| format!("{event_index:06}"));
+            let thread_id = trace_string(&value, &["thread_id", "thread"])
+                .unwrap_or_else(|| "main".to_string());
+            let event_kind = trace_string(&value, &["event_kind", "kind"])
+                .unwrap_or_else(|| "event".to_string());
+            let timestamp_ns = trace_u64(&value, &["timestamp_ns", "time_ns", "ts"]);
+            let function_name = trace_string(&value, &["function", "symbol", "function_name"]);
+            let address = trace_u64(&value, &["address", "pc", "ip"]);
+            if has_any_key(&value, &["address", "pc", "ip"]) && address.is_none() {
+                diagnostics.push(format!(
+                    "line {line_number}: address could not be parsed for event {event_id}"
+                ));
+            }
+            let message =
+                trace_string(&value, &["message", "summary"]).unwrap_or_else(|| event_kind.clone());
+            let raw_json = serde_json::to_string(&value).map_err(json_to_sql_error)?;
+            let correlated =
+                self.correlate_function(artifact, address, function_name.as_deref())?;
+
+            events.push(ParsedTraceEvent {
+                event_index,
+                event_id,
+                thread_id,
+                event_kind,
+                timestamp_ns,
+                function_name,
+                address,
+                message,
+                correlated,
+                raw_json,
+            });
+        }
+
+        let threads = events
+            .iter()
+            .map(|event| event.thread_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let session_ref = ObjectRef::lab_object(
+            ObjectKind::TraceSession,
+            Some(&artifact.key),
+            "trace",
+            &format!("session/{session_id}"),
+        )
+        .map_err(from_core_error)?;
+        let session_metadata = serde_json::json!({
+            "lab_id": "trace",
+            "session_id": session_id,
+            "source_path": source_path,
+            "event_count": events.len(),
+            "thread_count": threads.len(),
+            "diagnostics": diagnostics,
+            "command_previews": [
+                format!(":open {session_ref}"),
+                format!(":xrefs {session_ref}")
+            ]
+        })
+        .to_string();
+        ObjectRepository::new(self.connection).upsert_object(&StoredObject {
+            object_ref: session_ref.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some(format!("Trace session {label}")),
+            address: None,
+            size: Some(events.len() as u64),
+            source_run_id: None,
+            metadata_json: session_metadata,
+        })?;
+        self.upsert_session_row(
+            &session_ref,
+            artifact,
+            &session_id,
+            &label,
+            source_path,
+            events.len() as u64,
+            threads.len() as u64,
+            &diagnostics,
+            imported_at,
+        )?;
+
+        let mut correlated_events = 0u64;
+        for event in &events {
+            if event.correlated.is_some() {
+                correlated_events += 1;
+            }
+            self.upsert_event(&session_ref, artifact, event)?;
+        }
+
+        let status = if events.is_empty() && malformed_lines > 0 {
+            "failed"
+        } else {
+            "succeeded"
+        };
+        let job = AnalysisJobRepository::new(self.connection).insert(&NewAnalysisJob {
+            analysis_run_id: None,
+            artifact_key: Some(artifact.key.to_string()),
+            pass_name: "trace.import".to_string(),
+            profile: "trace".to_string(),
+            status: status.to_string(),
+            progress_current: events.len() as u64,
+            progress_total: Some(events.len() as u64 + malformed_lines),
+            objects_produced: events.len() as u64 + 1,
+            diagnostics_count: diagnostics.len() as u64,
+            byte_limit: None,
+            function_limit: None,
+            time_limit_ms: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "trace",
+                "session": session_ref.to_string(),
+                "source_path": source_path,
+                "events_imported": events.len(),
+                "correlated_events": correlated_events,
+                "malformed_lines": malformed_lines,
+                "threads": threads,
+                "diagnostics": diagnostics,
+                "log_snippets": [
+                    format!("Trace Lab imported {} events", events.len()),
+                    format!("correlated {} events to functions", correlated_events)
+                ]
+            })
+            .to_string(),
+            started_at: imported_at,
+        })?;
+
+        Ok(TraceImportOutcome {
+            session: session_ref,
+            events_imported: events.len() as u64,
+            correlated_events,
+            malformed_lines,
+            diagnostics,
+            threads,
+            analysis_job_id: job.id,
+        })
+    }
+
+    pub fn list_sessions_for_artifact(
+        &self,
+        artifact: &ObjectRef,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<TraceSessionRecord>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT object_key, artifact_key, session_id, label, source_path, event_count,
+                thread_count, diagnostics_json, imported_at
+            FROM trace_sessions
+            WHERE artifact_key = ?1
+            ORDER BY imported_at DESC, object_key
+            LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![artifact.key.as_str(), limit], |row| {
+            self.trace_session_from_row(row)
+        })?;
+        rows.collect()
+    }
+
+    pub fn list_events_for_session(
+        &self,
+        session: &ObjectRef,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<TraceEventRecord>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT te.object_key, te.session_key, te.artifact_key, te.event_index,
+                te.event_id, te.thread_id, te.event_kind, te.timestamp_ns, te.function_name,
+                te.address, te.message, te.correlated_object_key, co.kind, te.raw_json
+            FROM trace_events te
+            LEFT JOIN objects co ON co.object_key = te.correlated_object_key
+            WHERE te.session_key = ?1
+            ORDER BY te.event_index
+            LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![session.key.as_str(), limit], |row| {
+            Self::trace_event_from_row(row)
+        })?;
+        rows.collect()
+    }
+
+    fn upsert_session_row(
+        &self,
+        session_ref: &ObjectRef,
+        artifact: &ObjectRef,
+        session_id: &str,
+        label: &str,
+        source_path: &str,
+        event_count: u64,
+        thread_count: u64,
+        diagnostics: &[String],
+        imported_at: OffsetDateTime,
+    ) -> rusqlite::Result<()> {
+        let diagnostics_json = serde_json::to_string(diagnostics).map_err(json_to_sql_error)?;
+        self.connection.execute(
+            "INSERT INTO trace_sessions (
+                object_key, artifact_key, session_id, label, source_path, event_count,
+                thread_count, diagnostics_json, imported_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(object_key) DO UPDATE SET
+                artifact_key = excluded.artifact_key,
+                session_id = excluded.session_id,
+                label = excluded.label,
+                source_path = excluded.source_path,
+                event_count = excluded.event_count,
+                thread_count = excluded.thread_count,
+                diagnostics_json = excluded.diagnostics_json,
+                imported_at = excluded.imported_at",
+            params![
+                session_ref.key.as_str(),
+                artifact.key.as_str(),
+                session_id,
+                label,
+                source_path,
+                to_i64(event_count),
+                to_i64(thread_count),
+                diagnostics_json,
+                format_time(imported_at)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn upsert_event(
+        &self,
+        session_ref: &ObjectRef,
+        artifact: &ObjectRef,
+        event: &ParsedTraceEvent,
+    ) -> rusqlite::Result<()> {
+        let event_ref = ObjectRef::lab_object(
+            ObjectKind::TraceEvent,
+            Some(&artifact.key),
+            "trace",
+            &format!(
+                "session/{}/event/{}",
+                session_ref.key.as_str(),
+                event.event_id
+            ),
+        )
+        .map_err(from_core_error)?;
+        let object_repo = ObjectRepository::new(self.connection);
+        object_repo.upsert_object(&StoredObject {
+            object_ref: event_ref.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some(format!(
+                "{} {} {}",
+                event.thread_id, event.event_kind, event.message
+            )),
+            address: event.address,
+            size: None,
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "trace",
+                "session": session_ref.to_string(),
+                "event_id": event.event_id,
+                "event_index": event.event_index,
+                "thread_id": event.thread_id,
+                "event_kind": event.event_kind,
+                "timestamp_ns": event.timestamp_ns,
+                "function": event.function_name,
+                "address": event.address,
+                "message": event.message,
+                "correlated": event.correlated.as_ref().map(ToString::to_string),
+                "raw": serde_json::from_str::<serde_json::Value>(&event.raw_json)
+                    .unwrap_or_else(|_| serde_json::json!({ "raw": event.raw_json })),
+                "command_previews": event.correlated.as_ref().map(|target| {
+                    vec![
+                        format!(":open {target}"),
+                        format!(":finding link <finding> {} evidence", event_ref)
+                    ]
+                }).unwrap_or_else(|| vec![format!(":open {event_ref}")])
+            })
+            .to_string(),
+        })?;
+        self.connection.execute(
+            "INSERT INTO trace_events (
+                object_key, session_key, artifact_key, event_index, event_id, thread_id,
+                event_kind, timestamp_ns, function_name, address, message,
+                correlated_object_key, raw_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ON CONFLICT(object_key) DO UPDATE SET
+                session_key = excluded.session_key,
+                artifact_key = excluded.artifact_key,
+                event_index = excluded.event_index,
+                event_id = excluded.event_id,
+                thread_id = excluded.thread_id,
+                event_kind = excluded.event_kind,
+                timestamp_ns = excluded.timestamp_ns,
+                function_name = excluded.function_name,
+                address = excluded.address,
+                message = excluded.message,
+                correlated_object_key = excluded.correlated_object_key,
+                raw_json = excluded.raw_json",
+            params![
+                event_ref.key.as_str(),
+                session_ref.key.as_str(),
+                artifact.key.as_str(),
+                to_i64(event.event_index),
+                event.event_id,
+                event.thread_id,
+                event.event_kind,
+                event.timestamp_ns.map(to_i64),
+                event.function_name.as_deref(),
+                event.address.map(to_i64),
+                event.message,
+                event.correlated.as_ref().map(|target| target.key.as_str()),
+                event.raw_json,
+            ],
+        )?;
+
+        object_repo.upsert_edge(&StoredEdge {
+            edge_ref: ObjectRef::new(
+                ObjectKind::Edge,
+                StableObjectKey::edge(EdgeKind::Timeline, session_ref, &event_ref)
+                    .map_err(from_core_error)?,
+            ),
+            source: session_ref.clone(),
+            target: event_ref.clone(),
+            kind: EdgeKind::Timeline,
+            confidence: 1.0,
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "trace",
+                "event_index": event.event_index,
+                "thread_id": event.thread_id
+            })
+            .to_string(),
+        })?;
+        if let Some(target) = &event.correlated {
+            object_repo.upsert_edge(&StoredEdge {
+                edge_ref: ObjectRef::new(
+                    ObjectKind::Edge,
+                    StableObjectKey::edge(EdgeKind::Correlates, &event_ref, target)
+                        .map_err(from_core_error)?,
+                ),
+                source: event_ref,
+                target: target.clone(),
+                kind: EdgeKind::Correlates,
+                confidence: 1.0,
+                source_run_id: None,
+                metadata_json: serde_json::json!({
+                    "lab_id": "trace",
+                    "address": event.address,
+                    "function": event.function_name
+                })
+                .to_string(),
+            })?;
+        }
+        Ok(())
+    }
+
+    fn correlate_function(
+        &self,
+        artifact: &ObjectRef,
+        address: Option<u64>,
+        function_name: Option<&str>,
+    ) -> rusqlite::Result<Option<ObjectRef>> {
+        if let Some(address) = address {
+            let correlated = self
+                .connection
+                .query_row(
+                    "SELECT o.object_key
+                    FROM functions f
+                    JOIN objects o ON o.object_key = f.object_key
+                    WHERE o.artifact_key = ?1
+                      AND f.virtual_address IS NOT NULL
+                      AND f.virtual_address <= ?2
+                      AND (f.size IS NULL OR ?2 < f.virtual_address + f.size)
+                    ORDER BY f.virtual_address DESC
+                    LIMIT 1",
+                    params![artifact.key.as_str(), to_i64(address)],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(key) = correlated {
+                return Ok(Some(ObjectRef::new(
+                    ObjectKind::Function,
+                    key.parse().map_err(from_core_error)?,
+                )));
+            }
+        }
+        if let Some(function_name) = function_name {
+            let correlated = self
+                .connection
+                .query_row(
+                    "SELECT o.object_key
+                    FROM functions f
+                    JOIN objects o ON o.object_key = f.object_key
+                    WHERE o.artifact_key = ?1
+                      AND lower(f.name) = lower(?2)
+                    ORDER BY f.virtual_address, f.object_key
+                    LIMIT 1",
+                    params![artifact.key.as_str(), function_name],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(key) = correlated {
+                return Ok(Some(ObjectRef::new(
+                    ObjectKind::Function,
+                    key.parse().map_err(from_core_error)?,
+                )));
+            }
+        }
+        Ok(None)
+    }
+
+    fn trace_session_from_row(
+        &self,
+        row: &rusqlite::Row<'_>,
+    ) -> rusqlite::Result<TraceSessionRecord> {
+        let object_key: String = row.get(0)?;
+        let artifact_key: String = row.get(1)?;
+        let diagnostics_json: String = row.get(7)?;
+        let imported_at: String = row.get(8)?;
+        Ok(TraceSessionRecord {
+            object_ref: ObjectRef::new(
+                ObjectKind::TraceSession,
+                object_key.parse().map_err(from_core_error)?,
+            ),
+            artifact: ObjectRef::new(
+                ObjectKind::Artifact,
+                artifact_key.parse().map_err(from_core_error)?,
+            ),
+            session_id: row.get(2)?,
+            label: row.get(3)?,
+            source_path: row.get(4)?,
+            event_count: from_i64(row.get(5)?),
+            thread_count: from_i64(row.get(6)?),
+            diagnostics: serde_json::from_str(&diagnostics_json).map_err(json_from_sql_error)?,
+            imported_at: parse_time(&imported_at)?,
+        })
+    }
+
+    fn trace_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TraceEventRecord> {
+        let object_key: String = row.get(0)?;
+        let session_key: String = row.get(1)?;
+        let artifact_key: String = row.get(2)?;
+        let correlated_key: Option<String> = row.get(11)?;
+        let correlated_kind: Option<String> = row.get(12)?;
+        Ok(TraceEventRecord {
+            object_ref: ObjectRef::new(
+                ObjectKind::TraceEvent,
+                object_key.parse().map_err(from_core_error)?,
+            ),
+            session: ObjectRef::new(
+                ObjectKind::TraceSession,
+                session_key.parse().map_err(from_core_error)?,
+            ),
+            artifact: ObjectRef::new(
+                ObjectKind::Artifact,
+                artifact_key.parse().map_err(from_core_error)?,
+            ),
+            event_index: from_i64(row.get(3)?),
+            event_id: row.get(4)?,
+            thread_id: row.get(5)?,
+            event_kind: row.get(6)?,
+            timestamp_ns: row.get::<_, Option<i64>>(7)?.map(from_i64),
+            function_name: row.get(8)?,
+            address: row.get::<_, Option<i64>>(9)?.map(from_i64),
+            message: row.get(10)?,
+            correlated: if let (Some(key), Some(kind)) = (correlated_key, correlated_kind) {
+                Some(ObjectRef::new(
+                    kind.parse().map_err(from_core_error)?,
+                    key.parse().map_err(from_core_error)?,
+                ))
+            } else {
+                None
+            },
+            raw_json: row.get(13)?,
+        })
+    }
+}
+
+impl<'conn> CrashRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn import_log(
+        &self,
+        artifact: &ObjectRef,
+        source_path: &str,
+        log: &str,
+        imported_at: OffsetDateTime,
+    ) -> rusqlite::Result<CrashImportOutcome> {
+        let mut parsed = parse_crash_log(source_path, log)?;
+        for frame in &mut parsed.frames {
+            frame.correlated =
+                self.correlate_function(artifact, frame.address, frame.function_name.as_deref())?;
+        }
+        let correlated_frames = parsed
+            .frames
+            .iter()
+            .filter(|frame| frame.correlated.is_some())
+            .count() as u64;
+        let report_ref = ObjectRef::lab_object(
+            ObjectKind::CrashReport,
+            Some(&artifact.key),
+            "crash",
+            &format!("report/{}", parsed.crash_id),
+        )
+        .map_err(from_core_error)?;
+        let object_repo = ObjectRepository::new(self.connection);
+        object_repo.upsert_object(&StoredObject {
+            object_ref: report_ref.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some(format!("Crash report {}", parsed.label)),
+            address: parsed.frames.first().and_then(|frame| frame.address),
+            size: Some(parsed.frames.len() as u64),
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "crash",
+                "crash_id": &parsed.crash_id,
+                "source_path": source_path,
+                "sanitizer": &parsed.sanitizer,
+                "crash_class": &parsed.crash_class,
+                "signal": &parsed.signal,
+                "message": &parsed.message,
+                "signature": &parsed.signature,
+                "frame_count": parsed.frames.len(),
+                "correlated_frame_count": correlated_frames,
+                "diagnostics": &parsed.diagnostics,
+                "command_previews": [
+                    format!(":open {report_ref}"),
+                    format!(":xrefs {report_ref}"),
+                    format!(":finding link <finding> {report_ref} evidence")
+                ]
+            })
+            .to_string(),
+        })?;
+        self.upsert_report_row(
+            &report_ref,
+            artifact,
+            source_path,
+            &parsed,
+            correlated_frames,
+            imported_at,
+        )?;
+
+        for frame in &parsed.frames {
+            self.upsert_frame(&report_ref, artifact, frame)?;
+        }
+        let clustered_reports = self.upsert_cluster_edges(&report_ref, artifact, &parsed)?;
+        let findings_created = self.upsert_crash_finding(
+            &report_ref,
+            artifact,
+            parsed.frames.first(),
+            &parsed,
+            clustered_reports,
+            imported_at,
+        )?;
+
+        let status = if parsed.frames.is_empty() {
+            "failed"
+        } else {
+            "succeeded"
+        };
+        let job = AnalysisJobRepository::new(self.connection).insert(&NewAnalysisJob {
+            analysis_run_id: None,
+            artifact_key: Some(artifact.key.to_string()),
+            pass_name: "crash.import".to_string(),
+            profile: "crash".to_string(),
+            status: status.to_string(),
+            progress_current: parsed.frames.len() as u64,
+            progress_total: Some(parsed.frames.len() as u64),
+            objects_produced: parsed.frames.len() as u64 + 1 + findings_created,
+            diagnostics_count: parsed.diagnostics.len() as u64,
+            byte_limit: None,
+            function_limit: None,
+            time_limit_ms: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "crash",
+                "report": report_ref.to_string(),
+                "source_path": source_path,
+                "sanitizer": &parsed.sanitizer,
+                "crash_class": &parsed.crash_class,
+                "signal": &parsed.signal,
+                "signature": &parsed.signature,
+                "frames_imported": parsed.frames.len(),
+                "correlated_frames": correlated_frames,
+                "clustered_reports": clustered_reports,
+                "findings_created": findings_created,
+                "diagnostics": &parsed.diagnostics,
+                "log_snippets": [
+                    format!("Crash Lab imported {} stack frames", parsed.frames.len()),
+                    format!("correlated {} frames to functions", correlated_frames),
+                    format!("clustered with {} prior reports", clustered_reports)
+                ]
+            })
+            .to_string(),
+            started_at: imported_at,
+        })?;
+
+        Ok(CrashImportOutcome {
+            report: report_ref,
+            frames_imported: parsed.frames.len() as u64,
+            correlated_frames,
+            clustered_reports,
+            findings_created,
+            signature: parsed.signature,
+            diagnostics: parsed.diagnostics,
+            analysis_job_id: job.id,
+        })
+    }
+
+    pub fn list_reports_for_artifact(
+        &self,
+        artifact: &ObjectRef,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<CrashReportRecord>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT object_key, artifact_key, crash_id, label, source_path, sanitizer,
+                crash_class, signal, message, signature, frame_count, correlated_frame_count,
+                diagnostics_json, imported_at
+            FROM crash_reports
+            WHERE artifact_key = ?1
+            ORDER BY imported_at DESC, object_key
+            LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![artifact.key.as_str(), limit], |row| {
+            Self::crash_report_from_row(row)
+        })?;
+        rows.collect()
+    }
+
+    pub fn list_frames_for_report(
+        &self,
+        report: &ObjectRef,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<CrashFrameRecord>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT cf.object_key, cf.report_key, cf.artifact_key, cf.frame_index, cf.module,
+                cf.function_name, cf.address, cf.offset, cf.source_location, cf.confidence,
+                cf.correlated_object_key, co.kind, cf.raw_json
+            FROM crash_frames cf
+            LEFT JOIN objects co ON co.object_key = cf.correlated_object_key
+            WHERE cf.report_key = ?1
+            ORDER BY cf.frame_index
+            LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![report.key.as_str(), limit], |row| {
+            Self::crash_frame_from_row(row)
+        })?;
+        rows.collect()
+    }
+
+    fn upsert_report_row(
+        &self,
+        report_ref: &ObjectRef,
+        artifact: &ObjectRef,
+        source_path: &str,
+        report: &ParsedCrashReport,
+        correlated_frames: u64,
+        imported_at: OffsetDateTime,
+    ) -> rusqlite::Result<()> {
+        let diagnostics_json =
+            serde_json::to_string(&report.diagnostics).map_err(json_to_sql_error)?;
+        self.connection.execute(
+            "INSERT INTO crash_reports (
+                object_key, artifact_key, crash_id, label, source_path, sanitizer,
+                crash_class, signal, message, signature, frame_count,
+                correlated_frame_count, diagnostics_json, imported_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            ON CONFLICT(object_key) DO UPDATE SET
+                artifact_key = excluded.artifact_key,
+                crash_id = excluded.crash_id,
+                label = excluded.label,
+                source_path = excluded.source_path,
+                sanitizer = excluded.sanitizer,
+                crash_class = excluded.crash_class,
+                signal = excluded.signal,
+                message = excluded.message,
+                signature = excluded.signature,
+                frame_count = excluded.frame_count,
+                correlated_frame_count = excluded.correlated_frame_count,
+                diagnostics_json = excluded.diagnostics_json,
+                imported_at = excluded.imported_at",
+            params![
+                report_ref.key.as_str(),
+                artifact.key.as_str(),
+                report.crash_id,
+                report.label,
+                source_path,
+                report.sanitizer,
+                report.crash_class,
+                report.signal.as_deref(),
+                report.message,
+                report.signature,
+                to_i64(report.frames.len() as u64),
+                to_i64(correlated_frames),
+                diagnostics_json,
+                format_time(imported_at)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn upsert_frame(
+        &self,
+        report_ref: &ObjectRef,
+        artifact: &ObjectRef,
+        frame: &ParsedCrashFrame,
+    ) -> rusqlite::Result<()> {
+        let frame_ref = ObjectRef::lab_object(
+            ObjectKind::CrashFrame,
+            Some(&artifact.key),
+            "crash",
+            &format!(
+                "report/{}/frame/{}",
+                report_ref.key.as_str(),
+                frame.frame_index
+            ),
+        )
+        .map_err(from_core_error)?;
+        let label = crash_frame_label(frame);
+        let object_repo = ObjectRepository::new(self.connection);
+        object_repo.upsert_object(&StoredObject {
+            object_ref: frame_ref.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some(label),
+            address: frame.address,
+            size: None,
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "crash",
+                "report": report_ref.to_string(),
+                "frame_index": frame.frame_index,
+                "module": &frame.module,
+                "function": &frame.function_name,
+                "address": frame.address,
+                "offset": frame.offset,
+                "source_location": &frame.source_location,
+                "confidence": &frame.confidence,
+                "correlated": frame.correlated.as_ref().map(ToString::to_string),
+                "raw": serde_json::from_str::<serde_json::Value>(&frame.raw_json)
+                    .unwrap_or_else(|_| serde_json::json!({ "raw": &frame.raw_json })),
+                "command_previews": frame.correlated.as_ref().map(|target| {
+                    vec![
+                        format!(":open {target}"),
+                        format!(":finding link <finding> {} evidence", frame_ref)
+                    ]
+                }).unwrap_or_else(|| vec![format!(":open {frame_ref}")])
+            })
+            .to_string(),
+        })?;
+        self.connection.execute(
+            "INSERT INTO crash_frames (
+                object_key, report_key, artifact_key, frame_index, module, function_name,
+                address, offset, source_location, confidence, correlated_object_key, raw_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            ON CONFLICT(object_key) DO UPDATE SET
+                report_key = excluded.report_key,
+                artifact_key = excluded.artifact_key,
+                frame_index = excluded.frame_index,
+                module = excluded.module,
+                function_name = excluded.function_name,
+                address = excluded.address,
+                offset = excluded.offset,
+                source_location = excluded.source_location,
+                confidence = excluded.confidence,
+                correlated_object_key = excluded.correlated_object_key,
+                raw_json = excluded.raw_json",
+            params![
+                frame_ref.key.as_str(),
+                report_ref.key.as_str(),
+                artifact.key.as_str(),
+                to_i64(frame.frame_index),
+                frame.module.as_deref(),
+                frame.function_name.as_deref(),
+                frame.address.map(to_i64),
+                frame.offset.map(to_i64),
+                frame.source_location.as_deref(),
+                frame.confidence,
+                frame.correlated.as_ref().map(|target| target.key.as_str()),
+                frame.raw_json,
+            ],
+        )?;
+        object_repo.upsert_edge(&StoredEdge {
+            edge_ref: ObjectRef::new(
+                ObjectKind::Edge,
+                StableObjectKey::edge(EdgeKind::Contains, report_ref, &frame_ref)
+                    .map_err(from_core_error)?,
+            ),
+            source: report_ref.clone(),
+            target: frame_ref.clone(),
+            kind: EdgeKind::Contains,
+            confidence: 1.0,
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "crash",
+                "frame_index": frame.frame_index
+            })
+            .to_string(),
+        })?;
+        if let Some(target) = &frame.correlated {
+            object_repo.upsert_edge(&StoredEdge {
+                edge_ref: ObjectRef::new(
+                    ObjectKind::Edge,
+                    StableObjectKey::edge(EdgeKind::Correlates, &frame_ref, target)
+                        .map_err(from_core_error)?,
+                ),
+                source: frame_ref,
+                target: target.clone(),
+                kind: EdgeKind::Correlates,
+                confidence: 1.0,
+                source_run_id: None,
+                metadata_json: serde_json::json!({
+                    "lab_id": "crash",
+                    "address": frame.address,
+                    "function": &frame.function_name,
+                    "confidence": &frame.confidence
+                })
+                .to_string(),
+            })?;
+        }
+        Ok(())
+    }
+
+    fn upsert_cluster_edges(
+        &self,
+        report_ref: &ObjectRef,
+        artifact: &ObjectRef,
+        report: &ParsedCrashReport,
+    ) -> rusqlite::Result<u64> {
+        let mut statement = self.connection.prepare(
+            "SELECT object_key
+            FROM crash_reports
+            WHERE artifact_key = ?1 AND signature = ?2 AND object_key != ?3
+            ORDER BY imported_at DESC, object_key
+            LIMIT 25",
+        )?;
+        let rows = statement.query_map(
+            params![
+                artifact.key.as_str(),
+                report.signature,
+                report_ref.key.as_str()
+            ],
+            |row| row.get::<_, String>(0),
+        )?;
+        let prior = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        let object_repo = ObjectRepository::new(self.connection);
+        for key in &prior {
+            let target = ObjectRef::new(
+                ObjectKind::CrashReport,
+                key.parse().map_err(from_core_error)?,
+            );
+            object_repo.upsert_edge(&StoredEdge {
+                edge_ref: ObjectRef::new(
+                    ObjectKind::Edge,
+                    StableObjectKey::edge(EdgeKind::ClustersWith, report_ref, &target)
+                        .map_err(from_core_error)?,
+                ),
+                source: report_ref.clone(),
+                target,
+                kind: EdgeKind::ClustersWith,
+                confidence: 1.0,
+                source_run_id: None,
+                metadata_json: serde_json::json!({
+                    "lab_id": "crash",
+                    "signature": &report.signature,
+                    "sanitizer": &report.sanitizer,
+                    "crash_class": &report.crash_class
+                })
+                .to_string(),
+            })?;
+        }
+        Ok(prior.len() as u64)
+    }
+
+    fn upsert_crash_finding(
+        &self,
+        report_ref: &ObjectRef,
+        artifact: &ObjectRef,
+        top_frame: Option<&ParsedCrashFrame>,
+        report: &ParsedCrashReport,
+        clustered_reports: u64,
+        imported_at: OffsetDateTime,
+    ) -> rusqlite::Result<u64> {
+        let high_risk = crash_class_is_high_risk(&report.crash_class);
+        if !high_risk && clustered_reports == 0 {
+            return Ok(0);
+        }
+        let slug = format!("crash-{}", sanitize_key_component(&report.crash_id));
+        let created_at = format_time(imported_at)?;
+        let finding_ref = ObjectRef::new(
+            ObjectKind::Finding,
+            StableObjectKey::finding(&slug, &created_at).map_err(from_core_error)?,
+        );
+        let mut evidence = vec![FindingEvidence::new(
+            report_ref.clone(),
+            "primary",
+            0,
+            "Crash report imported by Crash Lab.",
+            Some(report.label.clone()),
+        )];
+        if let Some(frame) = top_frame {
+            let frame_ref = ObjectRef::lab_object(
+                ObjectKind::CrashFrame,
+                Some(&artifact.key),
+                "crash",
+                &format!(
+                    "report/{}/frame/{}",
+                    report_ref.key.as_str(),
+                    frame.frame_index
+                ),
+            )
+            .unwrap_or_else(|_| report_ref.clone());
+            evidence.push(FindingEvidence::new(
+                frame_ref,
+                "stack_frame",
+                1,
+                "Top relevant crash stack frame.",
+                frame.function_name.clone(),
+            ));
+        }
+        FindingRepository::new(self.connection).upsert_finding(&Finding {
+            object_ref: finding_ref,
+            title: format!("Crash Lab: {}", report.label),
+            severity: if high_risk {
+                FindingSeverity::High
+            } else {
+                FindingSeverity::Medium
+            },
+            status: FindingStatus::Draft,
+            summary: format!(
+                "{} {} crash signature `{}`.",
+                report.sanitizer, report.crash_class, report.signature
+            ),
+            body: format!(
+                "Crash Lab imported {} frames, correlated {} top-level evidence edges, and clustered with {} prior reports.",
+                report.frames.len(),
+                report.frames.iter().filter(|frame| frame.correlated.is_some()).count(),
+                clustered_reports
+            ),
+            tags: vec!["crash".to_string(), report.sanitizer.clone()],
+            evidence,
+            created_at: imported_at,
+            updated_at: imported_at,
+        })?;
+        Ok(1)
+    }
+
+    fn correlate_function(
+        &self,
+        artifact: &ObjectRef,
+        address: Option<u64>,
+        function_name: Option<&str>,
+    ) -> rusqlite::Result<Option<ObjectRef>> {
+        if let Some(address) = address {
+            let correlated = self
+                .connection
+                .query_row(
+                    "SELECT o.object_key
+                    FROM functions f
+                    JOIN objects o ON o.object_key = f.object_key
+                    WHERE o.artifact_key = ?1
+                      AND f.virtual_address IS NOT NULL
+                      AND f.virtual_address <= ?2
+                      AND (f.size IS NULL OR ?2 < f.virtual_address + f.size)
+                    ORDER BY f.virtual_address DESC
+                    LIMIT 1",
+                    params![artifact.key.as_str(), to_i64(address)],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(key) = correlated {
+                return Ok(Some(ObjectRef::new(
+                    ObjectKind::Function,
+                    key.parse().map_err(from_core_error)?,
+                )));
+            }
+        }
+        if let Some(function_name) = function_name {
+            let correlated = self
+                .connection
+                .query_row(
+                    "SELECT o.object_key
+                    FROM functions f
+                    JOIN objects o ON o.object_key = f.object_key
+                    WHERE o.artifact_key = ?1
+                      AND lower(f.name) = lower(?2)
+                    ORDER BY f.virtual_address, f.object_key
+                    LIMIT 1",
+                    params![artifact.key.as_str(), function_name],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(key) = correlated {
+                return Ok(Some(ObjectRef::new(
+                    ObjectKind::Function,
+                    key.parse().map_err(from_core_error)?,
+                )));
+            }
+        }
+        Ok(None)
+    }
+
+    fn crash_report_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CrashReportRecord> {
+        let object_key: String = row.get(0)?;
+        let artifact_key: String = row.get(1)?;
+        let diagnostics_json: String = row.get(12)?;
+        let imported_at: String = row.get(13)?;
+        Ok(CrashReportRecord {
+            object_ref: ObjectRef::new(
+                ObjectKind::CrashReport,
+                object_key.parse().map_err(from_core_error)?,
+            ),
+            artifact: ObjectRef::new(
+                ObjectKind::Artifact,
+                artifact_key.parse().map_err(from_core_error)?,
+            ),
+            crash_id: row.get(2)?,
+            label: row.get(3)?,
+            source_path: row.get(4)?,
+            sanitizer: row.get(5)?,
+            crash_class: row.get(6)?,
+            signal: row.get(7)?,
+            message: row.get(8)?,
+            signature: row.get(9)?,
+            frame_count: from_i64(row.get(10)?),
+            correlated_frame_count: from_i64(row.get(11)?),
+            diagnostics: serde_json::from_str(&diagnostics_json).map_err(json_from_sql_error)?,
+            imported_at: parse_time(&imported_at)?,
+        })
+    }
+
+    fn crash_frame_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CrashFrameRecord> {
+        let object_key: String = row.get(0)?;
+        let report_key: String = row.get(1)?;
+        let artifact_key: String = row.get(2)?;
+        let correlated_key: Option<String> = row.get(10)?;
+        let correlated_kind: Option<String> = row.get(11)?;
+        Ok(CrashFrameRecord {
+            object_ref: ObjectRef::new(
+                ObjectKind::CrashFrame,
+                object_key.parse().map_err(from_core_error)?,
+            ),
+            report: ObjectRef::new(
+                ObjectKind::CrashReport,
+                report_key.parse().map_err(from_core_error)?,
+            ),
+            artifact: ObjectRef::new(
+                ObjectKind::Artifact,
+                artifact_key.parse().map_err(from_core_error)?,
+            ),
+            frame_index: from_i64(row.get(3)?),
+            module: row.get(4)?,
+            function_name: row.get(5)?,
+            address: row.get::<_, Option<i64>>(6)?.map(from_i64),
+            offset: row.get::<_, Option<i64>>(7)?.map(from_i64),
+            source_location: row.get(8)?,
+            confidence: row.get(9)?,
+            correlated: if let (Some(key), Some(kind)) = (correlated_key, correlated_kind) {
+                Some(ObjectRef::new(
+                    kind.parse().map_err(from_core_error)?,
+                    key.parse().map_err(from_core_error)?,
+                ))
+            } else {
+                None
+            },
+            raw_json: row.get(12)?,
+        })
+    }
+}
+
+impl<'conn> ProtocolRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn import_sample(
+        &self,
+        artifact: &ObjectRef,
+        source_path: &str,
+        sample_json: &str,
+        imported_at: OffsetDateTime,
+    ) -> rusqlite::Result<ProtocolImportOutcome> {
+        let mut parsed = parse_protocol_sample(source_path, sample_json)?;
+        let mut correlated_fields = 0u64;
+        for message in &mut parsed.messages {
+            for field in &mut message.fields {
+                field.correlated = self.correlate_string(artifact, field.string_hint.as_deref())?;
+                if field.correlated.is_some() {
+                    correlated_fields += 1;
+                }
+            }
+        }
+
+        let field_count = parsed
+            .messages
+            .iter()
+            .map(|message| message.fields.len() as u64)
+            .sum::<u64>();
+        let sample_ref = ObjectRef::lab_object(
+            ObjectKind::ProtocolSample,
+            Some(&artifact.key),
+            "protocol",
+            &format!("sample/{}", parsed.sample_id),
+        )
+        .map_err(from_core_error)?;
+        let object_repo = ObjectRepository::new(self.connection);
+        object_repo.upsert_object(&StoredObject {
+            object_ref: sample_ref.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some(format!("Protocol sample {}", parsed.label)),
+            address: None,
+            size: Some(field_count),
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "protocol",
+                "sample_id": &parsed.sample_id,
+                "source_path": source_path,
+                "schema_hypothesis": &parsed.schema_hypothesis,
+                "message_count": parsed.messages.len(),
+                "field_count": field_count,
+                "correlated_field_count": correlated_fields,
+                "diagnostics": &parsed.diagnostics,
+                "command_previews": [
+                    format!(":open {sample_ref}"),
+                    format!(":xrefs {sample_ref}"),
+                    format!(":finding link <finding> {sample_ref} evidence")
+                ]
+            })
+            .to_string(),
+        })?;
+        self.upsert_sample_row(
+            &sample_ref,
+            artifact,
+            source_path,
+            &parsed,
+            field_count,
+            imported_at,
+        )?;
+
+        for message in &parsed.messages {
+            let message_ref = self.upsert_message(&sample_ref, artifact, message)?;
+            for field in &message.fields {
+                self.upsert_field(&sample_ref, &message_ref, artifact, field)?;
+            }
+        }
+
+        let status = if parsed.messages.is_empty() {
+            "failed"
+        } else {
+            "succeeded"
+        };
+        let job = AnalysisJobRepository::new(self.connection).insert(&NewAnalysisJob {
+            analysis_run_id: None,
+            artifact_key: Some(artifact.key.to_string()),
+            pass_name: "protocol.import".to_string(),
+            profile: "protocol".to_string(),
+            status: status.to_string(),
+            progress_current: parsed.messages.len() as u64,
+            progress_total: Some(parsed.messages.len() as u64),
+            objects_produced: parsed.messages.len() as u64 + field_count + 1,
+            diagnostics_count: parsed.diagnostics.len() as u64,
+            byte_limit: None,
+            function_limit: None,
+            time_limit_ms: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "protocol",
+                "sample": sample_ref.to_string(),
+                "source_path": source_path,
+                "messages_imported": parsed.messages.len(),
+                "fields_imported": field_count,
+                "correlated_fields": correlated_fields,
+                "schema_hypothesis": &parsed.schema_hypothesis,
+                "diagnostics": &parsed.diagnostics,
+                "log_snippets": [
+                    format!("Protocol Lab imported {} messages", parsed.messages.len()),
+                    format!("normalized {} protocol fields", field_count),
+                    format!("linked {} fields to binary strings", correlated_fields)
+                ]
+            })
+            .to_string(),
+            started_at: imported_at,
+        })?;
+
+        Ok(ProtocolImportOutcome {
+            sample: sample_ref,
+            messages_imported: parsed.messages.len() as u64,
+            fields_imported: field_count,
+            correlated_fields,
+            diagnostics: parsed.diagnostics,
+            schema_hypothesis: parsed.schema_hypothesis,
+            analysis_job_id: job.id,
+        })
+    }
+
+    pub fn list_samples_for_artifact(
+        &self,
+        artifact: &ObjectRef,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<ProtocolSampleRecord>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT object_key, artifact_key, sample_id, label, source_path, schema_hypothesis,
+                message_count, field_count, diagnostics_json, imported_at
+            FROM protocol_samples
+            WHERE artifact_key = ?1
+            ORDER BY imported_at DESC, object_key
+            LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![artifact.key.as_str(), limit], |row| {
+            Self::protocol_sample_from_row(row)
+        })?;
+        rows.collect()
+    }
+
+    pub fn list_messages_for_sample(
+        &self,
+        sample: &ObjectRef,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<ProtocolMessageRecord>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT object_key, sample_key, artifact_key, message_index, message_id, direction,
+                payload_len, field_count, schema_hypothesis, raw_json
+            FROM protocol_messages
+            WHERE sample_key = ?1
+            ORDER BY message_index
+            LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![sample.key.as_str(), limit], |row| {
+            Self::protocol_message_from_row(row)
+        })?;
+        rows.collect()
+    }
+
+    pub fn list_fields_for_message(
+        &self,
+        message: &ObjectRef,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<ProtocolFieldRecord>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT pf.object_key, pf.message_key, pf.sample_key, pf.artifact_key,
+                pf.field_index, pf.name, pf.byte_offset, pf.byte_length, pf.field_type,
+                pf.confidence, pf.entropy, pf.printable_ratio, pf.integer_value,
+                pf.string_hint, pf.correlated_object_key, co.kind, pf.raw_json
+            FROM protocol_fields pf
+            LEFT JOIN objects co ON co.object_key = pf.correlated_object_key
+            WHERE pf.message_key = ?1
+            ORDER BY pf.field_index
+            LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![message.key.as_str(), limit], |row| {
+            Self::protocol_field_from_row(row)
+        })?;
+        rows.collect()
+    }
+
+    fn upsert_sample_row(
+        &self,
+        sample_ref: &ObjectRef,
+        artifact: &ObjectRef,
+        source_path: &str,
+        sample: &ParsedProtocolSample,
+        field_count: u64,
+        imported_at: OffsetDateTime,
+    ) -> rusqlite::Result<()> {
+        let diagnostics_json =
+            serde_json::to_string(&sample.diagnostics).map_err(json_to_sql_error)?;
+        self.connection.execute(
+            "INSERT INTO protocol_samples (
+                object_key, artifact_key, sample_id, label, source_path, schema_hypothesis,
+                message_count, field_count, diagnostics_json, imported_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ON CONFLICT(object_key) DO UPDATE SET
+                artifact_key = excluded.artifact_key,
+                sample_id = excluded.sample_id,
+                label = excluded.label,
+                source_path = excluded.source_path,
+                schema_hypothesis = excluded.schema_hypothesis,
+                message_count = excluded.message_count,
+                field_count = excluded.field_count,
+                diagnostics_json = excluded.diagnostics_json,
+                imported_at = excluded.imported_at",
+            params![
+                sample_ref.key.as_str(),
+                artifact.key.as_str(),
+                sample.sample_id,
+                sample.label,
+                source_path,
+                sample.schema_hypothesis.as_deref(),
+                to_i64(sample.messages.len() as u64),
+                to_i64(field_count),
+                diagnostics_json,
+                format_time(imported_at)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn upsert_message(
+        &self,
+        sample_ref: &ObjectRef,
+        artifact: &ObjectRef,
+        message: &ParsedProtocolMessage,
+    ) -> rusqlite::Result<ObjectRef> {
+        let message_ref = ObjectRef::lab_object(
+            ObjectKind::ProtocolMessage,
+            Some(&artifact.key),
+            "protocol",
+            &format!(
+                "sample/{}/message/{}",
+                sample_ref.key.as_str(),
+                message.message_id
+            ),
+        )
+        .map_err(from_core_error)?;
+        let object_repo = ObjectRepository::new(self.connection);
+        object_repo.upsert_object(&StoredObject {
+            object_ref: message_ref.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some(format!(
+                "{} {} fields={}",
+                message.direction,
+                message.message_id,
+                message.fields.len()
+            )),
+            address: None,
+            size: Some(message.payload.len() as u64),
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "protocol",
+                "sample": sample_ref.to_string(),
+                "message_id": &message.message_id,
+                "message_index": message.message_index,
+                "direction": &message.direction,
+                "payload_len": message.payload.len(),
+                "field_count": message.fields.len(),
+                "schema_hypothesis": &message.schema_hypothesis,
+                "payload_hex": hex_digest(&message.payload),
+                "raw": serde_json::from_str::<serde_json::Value>(&message.raw_json)
+                    .unwrap_or_else(|_| serde_json::json!({ "raw": &message.raw_json })),
+                "command_previews": [
+                    format!(":open {message_ref}"),
+                    format!(":xrefs {message_ref}"),
+                    format!(":finding link <finding> {message_ref} evidence")
+                ]
+            })
+            .to_string(),
+        })?;
+        self.connection.execute(
+            "INSERT INTO protocol_messages (
+                object_key, sample_key, artifact_key, message_index, message_id, direction,
+                payload_len, field_count, schema_hypothesis, raw_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ON CONFLICT(object_key) DO UPDATE SET
+                sample_key = excluded.sample_key,
+                artifact_key = excluded.artifact_key,
+                message_index = excluded.message_index,
+                message_id = excluded.message_id,
+                direction = excluded.direction,
+                payload_len = excluded.payload_len,
+                field_count = excluded.field_count,
+                schema_hypothesis = excluded.schema_hypothesis,
+                raw_json = excluded.raw_json",
+            params![
+                message_ref.key.as_str(),
+                sample_ref.key.as_str(),
+                artifact.key.as_str(),
+                to_i64(message.message_index),
+                message.message_id,
+                message.direction,
+                to_i64(message.payload.len() as u64),
+                to_i64(message.fields.len() as u64),
+                message.schema_hypothesis.as_deref(),
+                message.raw_json,
+            ],
+        )?;
+        object_repo.upsert_edge(&StoredEdge {
+            edge_ref: ObjectRef::new(
+                ObjectKind::Edge,
+                StableObjectKey::edge(EdgeKind::Contains, sample_ref, &message_ref)
+                    .map_err(from_core_error)?,
+            ),
+            source: sample_ref.clone(),
+            target: message_ref.clone(),
+            kind: EdgeKind::Contains,
+            confidence: 1.0,
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "protocol",
+                "message_index": message.message_index,
+                "direction": &message.direction
+            })
+            .to_string(),
+        })?;
+        Ok(message_ref)
+    }
+
+    fn upsert_field(
+        &self,
+        sample_ref: &ObjectRef,
+        message_ref: &ObjectRef,
+        artifact: &ObjectRef,
+        field: &ParsedProtocolField,
+    ) -> rusqlite::Result<()> {
+        let field_ref = ObjectRef::lab_object(
+            ObjectKind::ProtocolField,
+            Some(&artifact.key),
+            "protocol",
+            &format!(
+                "message/{}/field/{}",
+                message_ref.key.as_str(),
+                field.field_index
+            ),
+        )
+        .map_err(from_core_error)?;
+        let object_repo = ObjectRepository::new(self.connection);
+        object_repo.upsert_object(&StoredObject {
+            object_ref: field_ref.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some(format!(
+                "{} off={} len={}",
+                field.name, field.byte_offset, field.byte_length
+            )),
+            address: None,
+            size: Some(field.byte_length),
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "protocol",
+                "sample": sample_ref.to_string(),
+                "message": message_ref.to_string(),
+                "field_index": field.field_index,
+                "name": &field.name,
+                "byte_offset": field.byte_offset,
+                "byte_length": field.byte_length,
+                "field_type": &field.field_type,
+                "confidence": &field.confidence,
+                "entropy": field.entropy,
+                "printable_ratio": field.printable_ratio,
+                "integer_value": field.integer_value,
+                "string_hint": &field.string_hint,
+                "value_hex": &field.value_hex,
+                "correlated": field.correlated.as_ref().map(ToString::to_string),
+                "raw": serde_json::from_str::<serde_json::Value>(&field.raw_json)
+                    .unwrap_or_else(|_| serde_json::json!({ "raw": &field.raw_json })),
+                "command_previews": field.correlated.as_ref().map(|target| {
+                    vec![
+                        format!(":open {target}"),
+                        format!(":finding link <finding> {} evidence", field_ref)
+                    ]
+                }).unwrap_or_else(|| vec![
+                    format!(":open {field_ref}"),
+                    format!(":finding link <finding> {field_ref} evidence")
+                ])
+            })
+            .to_string(),
+        })?;
+        self.connection.execute(
+            "INSERT INTO protocol_fields (
+                object_key, message_key, sample_key, artifact_key, field_index, name,
+                byte_offset, byte_length, field_type, confidence, entropy, printable_ratio,
+                integer_value, string_hint, correlated_object_key, raw_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+            ON CONFLICT(object_key) DO UPDATE SET
+                message_key = excluded.message_key,
+                sample_key = excluded.sample_key,
+                artifact_key = excluded.artifact_key,
+                field_index = excluded.field_index,
+                name = excluded.name,
+                byte_offset = excluded.byte_offset,
+                byte_length = excluded.byte_length,
+                field_type = excluded.field_type,
+                confidence = excluded.confidence,
+                entropy = excluded.entropy,
+                printable_ratio = excluded.printable_ratio,
+                integer_value = excluded.integer_value,
+                string_hint = excluded.string_hint,
+                correlated_object_key = excluded.correlated_object_key,
+                raw_json = excluded.raw_json",
+            params![
+                field_ref.key.as_str(),
+                message_ref.key.as_str(),
+                sample_ref.key.as_str(),
+                artifact.key.as_str(),
+                to_i64(field.field_index),
+                field.name,
+                to_i64(field.byte_offset),
+                to_i64(field.byte_length),
+                field.field_type,
+                field.confidence,
+                field.entropy,
+                field.printable_ratio,
+                field
+                    .integer_value
+                    .and_then(|value| i64::try_from(value).ok()),
+                field.string_hint.as_deref(),
+                field.correlated.as_ref().map(|target| target.key.as_str()),
+                field.raw_json,
+            ],
+        )?;
+        object_repo.upsert_edge(&StoredEdge {
+            edge_ref: ObjectRef::new(
+                ObjectKind::Edge,
+                StableObjectKey::edge(EdgeKind::Contains, message_ref, &field_ref)
+                    .map_err(from_core_error)?,
+            ),
+            source: message_ref.clone(),
+            target: field_ref.clone(),
+            kind: EdgeKind::Contains,
+            confidence: 1.0,
+            source_run_id: None,
+            metadata_json: serde_json::json!({
+                "lab_id": "protocol",
+                "field_index": field.field_index,
+                "name": &field.name
+            })
+            .to_string(),
+        })?;
+        if let Some(target) = &field.correlated {
+            object_repo.upsert_edge(&StoredEdge {
+                edge_ref: ObjectRef::new(
+                    ObjectKind::Edge,
+                    StableObjectKey::edge(EdgeKind::References, &field_ref, target)
+                        .map_err(from_core_error)?,
+                ),
+                source: field_ref,
+                target: target.clone(),
+                kind: EdgeKind::References,
+                confidence: 0.85,
+                source_run_id: None,
+                metadata_json: serde_json::json!({
+                    "lab_id": "protocol",
+                    "string_hint": &field.string_hint,
+                    "field_name": &field.name
+                })
+                .to_string(),
+            })?;
+        }
+        Ok(())
+    }
+
+    fn correlate_string(
+        &self,
+        artifact: &ObjectRef,
+        string_hint: Option<&str>,
+    ) -> rusqlite::Result<Option<ObjectRef>> {
+        let Some(string_hint) = string_hint.map(str::trim).filter(|value| value.len() >= 3) else {
+            return Ok(None);
+        };
+        let correlated = self
+            .connection
+            .query_row(
+                "SELECT o.object_key
+                FROM strings s
+                JOIN objects o ON o.object_key = s.object_key
+                WHERE o.artifact_key = ?1
+                  AND length(s.value) >= 3
+                  AND (
+                    lower(s.value) = lower(?2)
+                    OR instr(lower(s.value), lower(?2)) > 0
+                    OR instr(lower(?2), lower(s.value)) > 0
+                  )
+                ORDER BY length(s.value) DESC, o.object_key
+                LIMIT 1",
+                params![artifact.key.as_str(), string_hint],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(correlated.map(|key| {
+            ObjectRef::new(
+                ObjectKind::String,
+                key.parse().expect("stored string key must be valid"),
+            )
+        }))
+    }
+
+    fn protocol_sample_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProtocolSampleRecord> {
+        let object_key: String = row.get(0)?;
+        let artifact_key: String = row.get(1)?;
+        let diagnostics_json: String = row.get(8)?;
+        let imported_at: String = row.get(9)?;
+        Ok(ProtocolSampleRecord {
+            object_ref: ObjectRef::new(
+                ObjectKind::ProtocolSample,
+                object_key.parse().map_err(from_core_error)?,
+            ),
+            artifact: ObjectRef::new(
+                ObjectKind::Artifact,
+                artifact_key.parse().map_err(from_core_error)?,
+            ),
+            sample_id: row.get(2)?,
+            label: row.get(3)?,
+            source_path: row.get(4)?,
+            schema_hypothesis: row.get(5)?,
+            message_count: from_i64(row.get(6)?),
+            field_count: from_i64(row.get(7)?),
+            diagnostics: serde_json::from_str(&diagnostics_json).map_err(json_from_sql_error)?,
+            imported_at: parse_time(&imported_at)?,
+        })
+    }
+
+    fn protocol_message_from_row(
+        row: &rusqlite::Row<'_>,
+    ) -> rusqlite::Result<ProtocolMessageRecord> {
+        let object_key: String = row.get(0)?;
+        let sample_key: String = row.get(1)?;
+        let artifact_key: String = row.get(2)?;
+        Ok(ProtocolMessageRecord {
+            object_ref: ObjectRef::new(
+                ObjectKind::ProtocolMessage,
+                object_key.parse().map_err(from_core_error)?,
+            ),
+            sample: ObjectRef::new(
+                ObjectKind::ProtocolSample,
+                sample_key.parse().map_err(from_core_error)?,
+            ),
+            artifact: ObjectRef::new(
+                ObjectKind::Artifact,
+                artifact_key.parse().map_err(from_core_error)?,
+            ),
+            message_index: from_i64(row.get(3)?),
+            message_id: row.get(4)?,
+            direction: row.get(5)?,
+            payload_len: from_i64(row.get(6)?),
+            field_count: from_i64(row.get(7)?),
+            schema_hypothesis: row.get(8)?,
+            raw_json: row.get(9)?,
+        })
+    }
+
+    fn protocol_field_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProtocolFieldRecord> {
+        let object_key: String = row.get(0)?;
+        let message_key: String = row.get(1)?;
+        let sample_key: String = row.get(2)?;
+        let artifact_key: String = row.get(3)?;
+        let correlated_key: Option<String> = row.get(14)?;
+        let correlated_kind: Option<String> = row.get(15)?;
+        Ok(ProtocolFieldRecord {
+            object_ref: ObjectRef::new(
+                ObjectKind::ProtocolField,
+                object_key.parse().map_err(from_core_error)?,
+            ),
+            message: ObjectRef::new(
+                ObjectKind::ProtocolMessage,
+                message_key.parse().map_err(from_core_error)?,
+            ),
+            sample: ObjectRef::new(
+                ObjectKind::ProtocolSample,
+                sample_key.parse().map_err(from_core_error)?,
+            ),
+            artifact: ObjectRef::new(
+                ObjectKind::Artifact,
+                artifact_key.parse().map_err(from_core_error)?,
+            ),
+            field_index: from_i64(row.get(4)?),
+            name: row.get(5)?,
+            byte_offset: from_i64(row.get(6)?),
+            byte_length: from_i64(row.get(7)?),
+            field_type: row.get(8)?,
+            confidence: row.get(9)?,
+            entropy: row.get(10)?,
+            printable_ratio: row.get(11)?,
+            integer_value: row.get::<_, Option<i64>>(12)?.map(from_i64),
+            string_hint: row.get(13)?,
+            correlated: if let (Some(key), Some(kind)) = (correlated_key, correlated_kind) {
+                Some(ObjectRef::new(
+                    kind.parse().map_err(from_core_error)?,
+                    key.parse().map_err(from_core_error)?,
+                ))
+            } else {
+                None
+            },
+            raw_json: row.get(16)?,
         })
     }
 }
@@ -1957,6 +4460,22 @@ impl<'conn> PluginRunRepository<'conn> {
         self.get(id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
     }
 
+    pub fn list_recent(&self, limit: usize) -> rusqlite::Result<Vec<PluginRunRecord>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT id, analysis_run_id, plugin_id, plugin_version, manifest_digest,
+                input_digest, config_digest, status, permissions_json, diagnostics_json,
+                started_at, finished_at
+            FROM plugin_runs
+            ORDER BY started_at DESC, id DESC
+            LIMIT ?1",
+        )?;
+        let records = statement
+            .query_map([limit], Self::record_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(records)
+    }
+
     pub fn get(&self, id: i64) -> rusqlite::Result<Option<PluginRunRecord>> {
         self.connection
             .query_row(
@@ -1966,27 +4485,81 @@ impl<'conn> PluginRunRepository<'conn> {
                 FROM plugin_runs
                 WHERE id = ?1",
                 [id],
-                |row| {
-                    let started_at: String = row.get(10)?;
-                    let finished_at: Option<String> = row.get(11)?;
-                    Ok(PluginRunRecord {
-                        id: row.get(0)?,
-                        analysis_run_id: row.get(1)?,
-                        plugin_id: row.get(2)?,
-                        plugin_version: row.get(3)?,
-                        manifest_digest: row.get(4)?,
-                        input_digest: row.get(5)?,
-                        config_digest: row.get(6)?,
-                        status: row.get(7)?,
-                        permissions_json: row.get(8)?,
-                        diagnostics_json: row.get(9)?,
-                        started_at: parse_time(&started_at)?,
-                        finished_at: finished_at.as_deref().map(parse_time).transpose()?,
-                    })
-                },
+                Self::record_from_row,
             )
             .optional()
     }
+
+    fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginRunRecord> {
+        let started_at: String = row.get(10)?;
+        let finished_at: Option<String> = row.get(11)?;
+        Ok(PluginRunRecord {
+            id: row.get(0)?,
+            analysis_run_id: row.get(1)?,
+            plugin_id: row.get(2)?,
+            plugin_version: row.get(3)?,
+            manifest_digest: row.get(4)?,
+            input_digest: row.get(5)?,
+            config_digest: row.get(6)?,
+            status: row.get(7)?,
+            permissions_json: row.get(8)?,
+            diagnostics_json: row.get(9)?,
+            started_at: parse_time(&started_at)?,
+            finished_at: finished_at.as_deref().map(parse_time).transpose()?,
+        })
+    }
+}
+
+fn export_artifact_keys(evidence_objects: &[revdeck_core::ObjectSummary]) -> BTreeSet<String> {
+    evidence_objects
+        .iter()
+        .filter_map(|object| {
+            object.artifact_key.clone().or_else(|| {
+                (object.object_ref.kind == ObjectKind::Artifact)
+                    .then(|| object.object_ref.key.to_string())
+            })
+        })
+        .collect()
+}
+
+fn export_analysis_job(job: AnalysisJobRecord) -> ExportAnalysisJob {
+    ExportAnalysisJob {
+        id: job.id,
+        artifact_key: job.artifact_key,
+        pass_name: job.pass_name,
+        profile: job.profile,
+        status: job.status,
+        diagnostics_count: job.diagnostics_count,
+        metadata_json: job.metadata_json,
+        started_at: job.started_at,
+        finished_at: job.finished_at,
+    }
+}
+
+fn export_plugin_run(run: PluginRunRecord) -> ExportPluginRun {
+    ExportPluginRun {
+        id: run.id,
+        plugin_id: run.plugin_id,
+        plugin_version: run.plugin_version,
+        manifest_digest: run.manifest_digest,
+        input_digest: run.input_digest,
+        config_digest: run.config_digest,
+        status: run.status,
+        permissions_json: run.permissions_json,
+        diagnostics_json: run.diagnostics_json,
+        started_at: run.started_at,
+        finished_at: run.finished_at,
+    }
+}
+
+fn metadata_plugin_run_id(metadata_json: &str) -> Option<i64> {
+    let value = serde_json::from_str::<serde_json::Value>(metadata_json).ok()?;
+    value.get("plugin_run_id").and_then(|value| {
+        value
+            .as_i64()
+            .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
+            .or_else(|| value.as_str().and_then(|text| text.parse::<i64>().ok()))
+    })
 }
 
 fn to_i64(value: u64) -> i64 {
@@ -2009,6 +4582,928 @@ fn parse_time(value: &str) -> rusqlite::Result<OffsetDateTime> {
     })
 }
 
+fn collect_firmware_files(firmware_dir: &Path) -> rusqlite::Result<Vec<ParsedFirmwareFile>> {
+    let root = firmware_dir.canonicalize().map_err(io_to_sql_error)?;
+    if !root.is_dir() {
+        return Err(string_from_sql_error(
+            format!(
+                "firmware path is not a directory: {}",
+                firmware_dir.display()
+            ),
+            rusqlite::types::Type::Text,
+        ));
+    }
+    let mut paths = Vec::new();
+    collect_file_paths(&root, &mut paths)?;
+    paths.sort();
+
+    let mut files = Vec::new();
+    for path in paths {
+        let bytes = fs::read(&path).map_err(io_to_sql_error)?;
+        let metadata = fs::metadata(&path).map_err(io_to_sql_error)?;
+        let relative_path = normalize_firmware_relative_path(&root, &path);
+        let parent_path = Path::new(&relative_path)
+            .parent()
+            .and_then(|parent| parent.to_str())
+            .map(|parent| parent.replace('\\', "/"))
+            .filter(|parent| !parent.is_empty());
+        let sha256 = sha256_hex(&bytes);
+        let file_type = detect_firmware_file_type(&path, &bytes);
+        let executable = is_firmware_executable(&path, &file_type);
+        let nested_artifact = if matches!(file_type.as_str(), "elf" | "pe") {
+            Some(ObjectRef::artifact(&sha256, &relative_path).map_err(from_core_error)?)
+        } else {
+            None
+        };
+        files.push(ParsedFirmwareFile {
+            source_path: path,
+            relative_path,
+            parent_path,
+            size: metadata.len(),
+            sha256,
+            file_type,
+            executable,
+            nested_artifact,
+        });
+    }
+    Ok(files)
+}
+
+fn collect_file_paths(root: &Path, output: &mut Vec<PathBuf>) -> rusqlite::Result<()> {
+    for entry in fs::read_dir(root).map_err(io_to_sql_error)? {
+        let entry = entry.map_err(io_to_sql_error)?;
+        let path = entry.path();
+        let metadata = entry.metadata().map_err(io_to_sql_error)?;
+        if metadata.is_dir() {
+            collect_file_paths(&path, output)?;
+        } else if metadata.is_file() {
+            output.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn normalize_firmware_relative_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn firmware_digest(files: &[ParsedFirmwareFile]) -> String {
+    let mut hasher = Sha256::new();
+    for file in files {
+        hasher.update(file.relative_path.as_bytes());
+        hasher.update([0]);
+        hasher.update(file.sha256.as_bytes());
+        hasher.update([0]);
+        hasher.update(file.size.to_string().as_bytes());
+        hasher.update([0]);
+    }
+    hex_digest(hasher.finalize().as_slice())
+}
+
+fn detect_firmware_file_type(path: &Path, bytes: &[u8]) -> String {
+    if bytes.starts_with(b"\x7fELF") {
+        return "elf".to_string();
+    }
+    if bytes.starts_with(b"MZ") {
+        return "pe".to_string();
+    }
+    if bytes.starts_with(b"#!") {
+        return "script".to_string();
+    }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "sh" | "bash" | "ps1" | "py" => "script".to_string(),
+        "conf" | "cfg" | "ini" | "json" | "txt" | "xml" | "service" => "text".to_string(),
+        "so" | "bin" | "elf" => "binary".to_string(),
+        _ if is_mostly_printable(bytes) => "text".to_string(),
+        _ => "data".to_string(),
+    }
+}
+
+fn is_firmware_executable(path: &Path, file_type: &str) -> bool {
+    if matches!(file_type, "elf" | "pe" | "script") {
+        return true;
+    }
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "exe" | "bin" | "so"
+    )
+}
+
+fn is_mostly_printable(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return true;
+    }
+    let printable = bytes
+        .iter()
+        .filter(|byte| byte.is_ascii_graphic() || byte.is_ascii_whitespace())
+        .count();
+    printable * 100 / bytes.len() >= 85
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex_digest(hasher.finalize().as_slice())
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+fn derive_trace_session_id(source_path: &str) -> String {
+    let mut output = String::new();
+    let mut last_was_dash = false;
+    let stem = std::path::Path::new(source_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or(source_path);
+    for ch in stem.chars() {
+        if ch.is_ascii_alphanumeric() {
+            output.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if !last_was_dash {
+            output.push('-');
+            last_was_dash = true;
+        }
+    }
+    let output = output.trim_matches('-').to_string();
+    if output.is_empty() {
+        "trace-session".to_string()
+    } else {
+        output
+    }
+}
+
+fn trace_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .filter_map(|key| value.get(*key))
+        .find_map(|value| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    if value.is_number() || value.is_boolean() {
+                        Some(value.to_string())
+                    } else {
+                        None
+                    }
+                })
+        })
+}
+
+fn trace_u64(value: &serde_json::Value, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .filter_map(|key| value.get(*key))
+        .find_map(|value| {
+            value.as_u64().or_else(|| {
+                let text = value.as_str()?.trim();
+                if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+                    u64::from_str_radix(hex, 16).ok()
+                } else {
+                    text.parse::<u64>().ok()
+                }
+            })
+        })
+}
+
+fn has_any_key(value: &serde_json::Value, keys: &[&str]) -> bool {
+    keys.iter().any(|key| value.get(*key).is_some())
+}
+
+fn parse_protocol_sample(
+    source_path: &str,
+    sample_json: &str,
+) -> rusqlite::Result<ParsedProtocolSample> {
+    let trimmed = sample_json.trim();
+    if trimmed.is_empty() {
+        return Err(string_from_sql_error(
+            "protocol sample is empty".to_string(),
+            rusqlite::types::Type::Text,
+        ));
+    }
+    let value = serde_json::from_str::<serde_json::Value>(trimmed).map_err(json_from_sql_error)?;
+    if !value.is_object() {
+        return Err(string_from_sql_error(
+            format!(
+                "protocol sample must be a JSON object, got {}",
+                value_type_name(&value)
+            ),
+            rusqlite::types::Type::Text,
+        ));
+    }
+
+    let mut diagnostics = Vec::new();
+    let record_type =
+        trace_string(&value, &["type", "record_type"]).unwrap_or_else(|| "protocol".to_string());
+    if !matches!(
+        record_type.as_str(),
+        "protocol" | "protocol_sample" | "sample"
+    ) {
+        diagnostics.push(format!("unsupported protocol record type `{record_type}`"));
+    }
+    let sample_id = trace_string(&value, &["sample_id", "id", "name"])
+        .unwrap_or_else(|| derive_protocol_sample_id(source_path, trimmed));
+    let label = trace_string(&value, &["label", "title", "display_name"])
+        .unwrap_or_else(|| sample_id.clone());
+    let schema_hypothesis = trace_string(&value, &["schema_hypothesis", "schema", "hypothesis"]);
+    let mut messages = Vec::new();
+
+    if let Some(array) = value
+        .get("messages")
+        .or_else(|| value.get("samples"))
+        .and_then(serde_json::Value::as_array)
+    {
+        for (index, message_value) in array.iter().enumerate() {
+            if !message_value.is_object() {
+                diagnostics.push(format!("message {index}: expected object"));
+                continue;
+            }
+            messages.push(parse_protocol_message(
+                message_value,
+                index as u64,
+                &mut diagnostics,
+            )?);
+        }
+    } else if has_any_key(&value, &["payload_hex", "payload", "payload_text", "bytes"]) {
+        messages.push(parse_protocol_message(&value, 0, &mut diagnostics)?);
+    } else {
+        diagnostics.push("no protocol messages found".to_string());
+    }
+
+    Ok(ParsedProtocolSample {
+        sample_id,
+        label,
+        schema_hypothesis,
+        diagnostics,
+        messages,
+    })
+}
+
+fn parse_protocol_message(
+    value: &serde_json::Value,
+    default_index: u64,
+    diagnostics: &mut Vec<String>,
+) -> rusqlite::Result<ParsedProtocolMessage> {
+    let message_index = trace_u64(value, &["message_index", "index", "n"]).unwrap_or(default_index);
+    let message_id = trace_string(value, &["message_id", "id", "name"])
+        .unwrap_or_else(|| format!("message-{message_index:04}"));
+    let direction = trace_string(value, &["direction", "dir"])
+        .map(|value| normalize_protocol_token(&value))
+        .unwrap_or_else(|| "unknown".to_string());
+    let payload = decode_protocol_payload(value, diagnostics, &message_id)?;
+    let schema_hypothesis = trace_string(value, &["schema_hypothesis", "schema", "hypothesis"]);
+    let mut fields = Vec::new();
+    if let Some(array) = value.get("fields").and_then(serde_json::Value::as_array) {
+        for (index, field_value) in array.iter().enumerate() {
+            if !field_value.is_object() {
+                diagnostics.push(format!("{message_id} field {index}: expected object"));
+                continue;
+            }
+            if let Some(field) = parse_protocol_field(
+                field_value,
+                index as u64,
+                &payload,
+                diagnostics,
+                &message_id,
+            )? {
+                fields.push(field);
+            }
+        }
+    } else if !payload.is_empty() {
+        diagnostics.push(format!(
+            "{message_id}: no fields declared; created whole-payload field"
+        ));
+        let value = serde_json::json!({
+            "name": "payload",
+            "offset": 0,
+            "length": payload.len(),
+            "type": "bytes",
+            "confidence": "fallback"
+        });
+        if let Some(field) = parse_protocol_field(&value, 0, &payload, diagnostics, &message_id)? {
+            fields.push(field);
+        }
+    }
+    fields.sort_by_key(|field| field.field_index);
+
+    Ok(ParsedProtocolMessage {
+        message_index,
+        message_id,
+        direction,
+        payload,
+        schema_hypothesis,
+        fields,
+        raw_json: serde_json::to_string(value).map_err(json_to_sql_error)?,
+    })
+}
+
+fn parse_protocol_field(
+    value: &serde_json::Value,
+    default_index: u64,
+    payload: &[u8],
+    diagnostics: &mut Vec<String>,
+    message_id: &str,
+) -> rusqlite::Result<Option<ParsedProtocolField>> {
+    let field_index = trace_u64(value, &["field_index", "index", "n"]).unwrap_or(default_index);
+    let name = trace_string(value, &["name", "field", "label"])
+        .unwrap_or_else(|| format!("field_{field_index:02}"));
+    let Some(byte_offset) = trace_u64(value, &["byte_offset", "offset", "start"]) else {
+        diagnostics.push(format!("{message_id} field {field_index}: missing offset"));
+        return Ok(None);
+    };
+    let Some(byte_length) = trace_u64(value, &["byte_length", "length", "len", "size"]) else {
+        diagnostics.push(format!("{message_id} field {field_index}: missing length"));
+        return Ok(None);
+    };
+    let start = usize::try_from(byte_offset).unwrap_or(usize::MAX);
+    let length = usize::try_from(byte_length).unwrap_or(usize::MAX);
+    let end = start.saturating_add(length);
+    if start > payload.len() || end > payload.len() {
+        diagnostics.push(format!(
+            "{message_id} field {field_index}: slice {byte_offset}+{byte_length} exceeds payload length {}",
+            payload.len()
+        ));
+        return Ok(None);
+    }
+    let bytes = &payload[start..end];
+    let field_type = trace_string(value, &["field_type", "type", "kind"])
+        .map(|value| normalize_protocol_token(&value))
+        .unwrap_or_else(|| infer_protocol_field_type(bytes));
+    let confidence = trace_string(value, &["confidence"]).unwrap_or_else(|| "inferred".to_string());
+    let explicit_hint = trace_string(value, &["string_hint", "hint", "value"]);
+    let string_hint = explicit_hint.or_else(|| infer_protocol_string_hint(bytes, &field_type));
+    Ok(Some(ParsedProtocolField {
+        field_index,
+        name,
+        byte_offset,
+        byte_length,
+        field_type,
+        confidence,
+        value_hex: hex_digest(bytes),
+        entropy: byte_entropy(bytes),
+        printable_ratio: printable_ratio(bytes),
+        integer_value: integer_like_value(bytes),
+        string_hint,
+        correlated: None,
+        raw_json: serde_json::to_string(value).map_err(json_to_sql_error)?,
+    }))
+}
+
+fn decode_protocol_payload(
+    value: &serde_json::Value,
+    diagnostics: &mut Vec<String>,
+    message_id: &str,
+) -> rusqlite::Result<Vec<u8>> {
+    if let Some(hex) = trace_string(value, &["payload_hex", "hex", "bytes_hex"]) {
+        return decode_hex_bytes(&hex).ok_or_else(|| {
+            string_from_sql_error(
+                format!("{message_id}: invalid payload_hex"),
+                rusqlite::types::Type::Text,
+            )
+        });
+    }
+    if let Some(text) = trace_string(value, &["payload_text", "text"]) {
+        return Ok(text.into_bytes());
+    }
+    if let Some(payload) = value.get("payload") {
+        if let Some(text) = payload.as_str() {
+            if let Some(bytes) = decode_hex_bytes(text) {
+                return Ok(bytes);
+            }
+            diagnostics.push(format!(
+                "{message_id}: payload string is not hex; imported as UTF-8 bytes"
+            ));
+            return Ok(text.as_bytes().to_vec());
+        }
+    }
+    if let Some(array) = value.get("bytes").and_then(serde_json::Value::as_array) {
+        let mut bytes = Vec::with_capacity(array.len());
+        for (index, byte) in array.iter().enumerate() {
+            let Some(value) = byte.as_u64().filter(|value| *value <= 0xff) else {
+                return Err(string_from_sql_error(
+                    format!("{message_id}: bytes[{index}] is not a byte"),
+                    rusqlite::types::Type::Integer,
+                ));
+            };
+            bytes.push(value as u8);
+        }
+        return Ok(bytes);
+    }
+    diagnostics.push(format!("{message_id}: missing payload"));
+    Ok(Vec::new())
+}
+
+fn derive_protocol_sample_id(source_path: &str, seed: &str) -> String {
+    let stem = Path::new(source_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("protocol");
+    let slug = sanitize_key_component(stem).trim_matches('-').to_string();
+    let digest = short_content_digest(seed.as_bytes());
+    if slug.is_empty() {
+        format!("protocol-{digest}")
+    } else {
+        format!("{slug}-{digest}")
+    }
+}
+
+fn decode_hex_bytes(value: &str) -> Option<Vec<u8>> {
+    let mut normalized = value.trim();
+    if let Some(stripped) = normalized
+        .strip_prefix("0x")
+        .or_else(|| normalized.strip_prefix("0X"))
+    {
+        normalized = stripped;
+    }
+    let digits = normalized
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace() && *ch != ':' && *ch != '-' && *ch != '_')
+        .collect::<String>();
+    if digits.is_empty() || digits.len() % 2 != 0 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(digits.len() / 2);
+    for index in (0..digits.len()).step_by(2) {
+        let byte = u8::from_str_radix(&digits[index..index + 2], 16).ok()?;
+        bytes.push(byte);
+    }
+    Some(bytes)
+}
+
+fn byte_entropy(bytes: &[u8]) -> f64 {
+    if bytes.is_empty() {
+        return 0.0;
+    }
+    let mut counts = [0u64; 256];
+    for byte in bytes {
+        counts[*byte as usize] += 1;
+    }
+    let len = bytes.len() as f64;
+    counts
+        .iter()
+        .copied()
+        .filter(|count| *count > 0)
+        .map(|count| {
+            let p = count as f64 / len;
+            -p * p.log2()
+        })
+        .sum()
+}
+
+fn printable_ratio(bytes: &[u8]) -> f64 {
+    if bytes.is_empty() {
+        return 0.0;
+    }
+    let printable = bytes
+        .iter()
+        .filter(|byte| byte.is_ascii_graphic() || byte.is_ascii_whitespace())
+        .count();
+    printable as f64 / bytes.len() as f64
+}
+
+fn integer_like_value(bytes: &[u8]) -> Option<u64> {
+    if bytes.is_empty() || bytes.len() > 8 {
+        return None;
+    }
+    Some(
+        bytes
+            .iter()
+            .fold(0u64, |acc, byte| (acc << 8) | u64::from(*byte)),
+    )
+}
+
+fn infer_protocol_field_type(bytes: &[u8]) -> String {
+    if infer_protocol_string_hint(bytes, "string").is_some() {
+        "string".to_string()
+    } else if bytes.len() <= 8 {
+        "integer".to_string()
+    } else {
+        "bytes".to_string()
+    }
+}
+
+fn infer_protocol_string_hint(bytes: &[u8], field_type: &str) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let text = std::str::from_utf8(bytes)
+        .ok()?
+        .trim_matches(char::from(0))
+        .trim();
+    if text.len() < 3 {
+        return None;
+    }
+    if normalize_protocol_token(field_type) == "string" || printable_ratio(bytes) >= 0.85 {
+        Some(text.to_string())
+    } else {
+        None
+    }
+}
+
+fn normalize_protocol_token(value: &str) -> String {
+    normalize_crash_token(value)
+}
+
+fn parse_crash_log(source_path: &str, log: &str) -> rusqlite::Result<ParsedCrashReport> {
+    let trimmed = log.trim();
+    if trimmed.is_empty() {
+        return Err(string_from_sql_error(
+            "crash log is empty".to_string(),
+            rusqlite::types::Type::Text,
+        ));
+    }
+
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(value) if value.is_object() => parse_crash_json(source_path, &value),
+        Ok(value) => {
+            let mut parsed = parse_crash_text(source_path, trimmed)?;
+            parsed.diagnostics.push(format!(
+                "top-level JSON value `{}` is not a crash object; parsed as text fallback",
+                value_type_name(&value)
+            ));
+            Ok(parsed)
+        }
+        Err(_) => parse_crash_text(source_path, trimmed),
+    }
+}
+
+fn parse_crash_json(
+    source_path: &str,
+    value: &serde_json::Value,
+) -> rusqlite::Result<ParsedCrashReport> {
+    let mut diagnostics = Vec::new();
+    let record_type =
+        trace_string(value, &["type", "record_type"]).unwrap_or_else(|| "crash".into());
+    if !matches!(record_type.as_str(), "crash" | "crash_report" | "report") {
+        diagnostics.push(format!("unsupported crash record type `{record_type}`"));
+    }
+
+    let sanitizer = trace_string(value, &["sanitizer", "tool", "runtime"])
+        .map(|value| normalize_crash_token(&value))
+        .unwrap_or_else(|| infer_sanitizer_from_text(&value.to_string()));
+    let crash_class = trace_string(value, &["crash_class", "class", "bug_type", "kind"])
+        .map(|value| normalize_crash_token(&value))
+        .unwrap_or_else(|| "unknown".to_string());
+    let signal = trace_string(value, &["signal", "exception", "fatal_signal"]);
+    let message = trace_string(value, &["message", "summary", "description"])
+        .unwrap_or_else(|| format!("{sanitizer} {crash_class}"));
+    let label = trace_string(value, &["label", "title", "name"])
+        .unwrap_or_else(|| format!("{sanitizer} {crash_class}"));
+
+    let mut frames = Vec::new();
+    if let Some(array) = value
+        .get("frames")
+        .or_else(|| value.get("stack"))
+        .or_else(|| value.get("stack_frames"))
+        .and_then(serde_json::Value::as_array)
+    {
+        for (index, frame_value) in array.iter().enumerate() {
+            if !frame_value.is_object() {
+                diagnostics.push(format!("frame {index}: expected object"));
+                continue;
+            }
+            let frame_index =
+                trace_u64(frame_value, &["frame_index", "index", "n"]).unwrap_or(index as u64);
+            let address = trace_u64(frame_value, &["address", "pc", "ip"]);
+            if has_any_key(frame_value, &["address", "pc", "ip"]) && address.is_none() {
+                diagnostics.push(format!("frame {frame_index}: address could not be parsed"));
+            }
+            let raw_json = serde_json::to_string(frame_value).map_err(json_to_sql_error)?;
+            frames.push(ParsedCrashFrame {
+                frame_index,
+                module: trace_string(frame_value, &["module", "binary", "image"]),
+                function_name: trace_string(frame_value, &["function", "symbol", "function_name"]),
+                address,
+                offset: trace_u64(frame_value, &["offset", "module_offset"]),
+                source_location: trace_string(
+                    frame_value,
+                    &["source", "source_location", "location", "file_line"],
+                ),
+                confidence: trace_string(frame_value, &["confidence"])
+                    .unwrap_or_else(|| "reported".to_string()),
+                correlated: None,
+                raw_json,
+            });
+        }
+    } else if let Some(stack) = value.get("stack").and_then(serde_json::Value::as_str) {
+        frames = parse_crash_text_frames(stack, &mut diagnostics);
+    } else {
+        diagnostics.push("no stack frames found in crash JSON".to_string());
+    }
+
+    frames.sort_by_key(|frame| frame.frame_index);
+    let mut report = ParsedCrashReport {
+        crash_id: trace_string(value, &["crash_id", "id", "case_id"])
+            .unwrap_or_else(|| derive_crash_id(source_path, &message)),
+        label,
+        sanitizer,
+        crash_class,
+        signal,
+        message,
+        signature: String::new(),
+        diagnostics,
+        frames,
+    };
+    report.signature = trace_string(value, &["signature", "dedupe_signature"])
+        .unwrap_or_else(|| build_crash_signature(&report));
+    Ok(report)
+}
+
+fn parse_crash_text(source_path: &str, log: &str) -> rusqlite::Result<ParsedCrashReport> {
+    let mut diagnostics = Vec::new();
+    let frames = parse_crash_text_frames(log, &mut diagnostics);
+    let first_line = log
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("crash log");
+    let sanitizer = infer_sanitizer_from_text(log);
+    let crash_class = infer_crash_class_from_text(log);
+    let signal = infer_signal_from_text(log);
+    let message = first_line.to_string();
+    let label = if sanitizer == "unknown" && crash_class == "unknown" {
+        first_line.to_string()
+    } else {
+        format!("{sanitizer} {crash_class}")
+    };
+    if frames.is_empty() {
+        diagnostics.push("no stack frames found in crash text".to_string());
+    }
+    let mut report = ParsedCrashReport {
+        crash_id: derive_crash_id(source_path, log),
+        label,
+        sanitizer,
+        crash_class,
+        signal,
+        message,
+        signature: String::new(),
+        diagnostics,
+        frames,
+    };
+    report.signature = build_crash_signature(&report);
+    Ok(report)
+}
+
+fn parse_crash_text_frames(log: &str, diagnostics: &mut Vec<String>) -> Vec<ParsedCrashFrame> {
+    let mut frames = Vec::new();
+    for line in log.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix('#') else {
+            continue;
+        };
+        let digits = rest
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>();
+        if digits.is_empty() {
+            continue;
+        }
+        let frame_index = digits.parse::<u64>().unwrap_or(frames.len() as u64);
+        let body = rest[digits.len()..].trim();
+        let tokens = body.split_whitespace().collect::<Vec<_>>();
+        let address = tokens.iter().find_map(|token| {
+            parse_u64_text(token.trim_matches(|ch: char| ch == '(' || ch == ')'))
+        });
+        let function_name = tokens
+            .windows(2)
+            .find_map(|window| (window[0] == "in").then(|| clean_symbol_token(window[1])))
+            .or_else(|| {
+                tokens
+                    .iter()
+                    .find(|token| !token.starts_with("0x"))
+                    .map(|token| clean_symbol_token(token))
+            });
+        let module = tokens
+            .iter()
+            .find(|token| token.contains('(') || token.ends_with(".so") || token.ends_with(".elf"))
+            .map(|token| {
+                token
+                    .trim_matches(|ch: char| ch == '(' || ch == ')')
+                    .to_string()
+            });
+        let source_location = tokens
+            .iter()
+            .rev()
+            .find(|token| token.contains(':') && !token.starts_with("0x"))
+            .map(|token| {
+                token
+                    .trim_matches(|ch: char| ch == '(' || ch == ')')
+                    .to_string()
+            });
+        if address.is_none() && function_name.is_none() {
+            diagnostics.push(format!(
+                "frame {frame_index}: no address or function parsed"
+            ));
+        }
+        frames.push(ParsedCrashFrame {
+            frame_index,
+            module,
+            function_name,
+            address,
+            offset: None,
+            source_location,
+            confidence: "reported".to_string(),
+            correlated: None,
+            raw_json: serde_json::json!({ "line": trimmed }).to_string(),
+        });
+    }
+    frames
+}
+
+fn build_crash_signature(report: &ParsedCrashReport) -> String {
+    let top = report
+        .frames
+        .first()
+        .and_then(frame_identity)
+        .unwrap_or_else(|| "no-frame".to_string());
+    let stack_prefix = report
+        .frames
+        .iter()
+        .take(4)
+        .filter_map(frame_identity)
+        .collect::<Vec<_>>()
+        .join(">");
+    format!(
+        "{}|{}|{}|{}|{}",
+        normalize_crash_token(&report.sanitizer),
+        normalize_crash_token(&report.crash_class),
+        report.signal.as_deref().unwrap_or("no-signal"),
+        normalize_crash_token(&top),
+        if stack_prefix.is_empty() {
+            "no-stack".to_string()
+        } else {
+            normalize_crash_token(&stack_prefix)
+        }
+    )
+}
+
+fn frame_identity(frame: &ParsedCrashFrame) -> Option<String> {
+    frame
+        .function_name
+        .clone()
+        .or_else(|| frame.address.map(|address| format!("0x{address:x}")))
+}
+
+fn crash_frame_label(frame: &ParsedCrashFrame) -> String {
+    let subject = frame
+        .function_name
+        .as_deref()
+        .or(frame.module.as_deref())
+        .unwrap_or("unknown");
+    let address = frame
+        .address
+        .map(|address| format!(" @ 0x{address:x}"))
+        .unwrap_or_default();
+    format!("#{} {subject}{address}", frame.frame_index)
+}
+
+fn crash_class_is_high_risk(crash_class: &str) -> bool {
+    let normalized = normalize_crash_token(crash_class);
+    matches!(
+        normalized.as_str(),
+        "heap-use-after-free"
+            | "stack-use-after-free"
+            | "use-after-free"
+            | "heap-buffer-overflow"
+            | "stack-buffer-overflow"
+            | "global-buffer-overflow"
+            | "double-free"
+            | "wild-free"
+            | "out-of-bounds"
+    ) || normalized.contains("use-after-free")
+        || normalized.contains("buffer-overflow")
+}
+
+fn infer_sanitizer_from_text(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("addresssanitizer") || lower.contains("asan") {
+        "asan".to_string()
+    } else if lower.contains("threadsanitizer") || lower.contains("tsan") {
+        "tsan".to_string()
+    } else if lower.contains("undefinedbehaviorsanitizer") || lower.contains("ubsan") {
+        "ubsan".to_string()
+    } else if lower.contains("memorysanitizer") || lower.contains("msan") {
+        "msan".to_string()
+    } else if lower.contains("panicked at") || lower.contains("panic") {
+        "panic".to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
+fn infer_crash_class_from_text(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    for marker in [
+        "heap-use-after-free",
+        "stack-use-after-free",
+        "heap-buffer-overflow",
+        "stack-buffer-overflow",
+        "global-buffer-overflow",
+        "double-free",
+        "segmentation fault",
+        "panic",
+    ] {
+        if lower.contains(marker) {
+            return normalize_crash_token(marker);
+        }
+    }
+    "unknown".to_string()
+}
+
+fn infer_signal_from_text(text: &str) -> Option<String> {
+    text.split(|ch: char| ch.is_whitespace() || ch == ':' || ch == ',' || ch == ')')
+        .find(|token| token.starts_with("SIG") && token.len() > 3)
+        .map(str::to_string)
+}
+
+fn derive_crash_id(source_path: &str, seed: &str) -> String {
+    let stem = Path::new(source_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("crash");
+    let slug = sanitize_key_component(stem).trim_matches('-').to_string();
+    let digest = short_content_digest(seed.as_bytes());
+    if slug.is_empty() {
+        format!("crash-{digest}")
+    } else {
+        format!("{slug}-{digest}")
+    }
+}
+
+fn normalize_crash_token(value: &str) -> String {
+    let mut output = String::new();
+    let mut last_dash = false;
+    for ch in value.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            output.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            output.push('-');
+            last_dash = true;
+        }
+    }
+    let output = output.trim_matches('-').to_string();
+    if output.is_empty() {
+        "unknown".to_string()
+    } else {
+        output
+    }
+}
+
+fn clean_symbol_token(value: &str) -> String {
+    value
+        .trim_matches(|ch: char| {
+            ch == '(' || ch == ')' || ch == '[' || ch == ']' || ch == ',' || ch == ':'
+        })
+        .to_string()
+}
+
+fn parse_u64_text(value: &str) -> Option<u64> {
+    if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        u64::from_str_radix(hex, 16).ok()
+    } else {
+        value.parse::<u64>().ok()
+    }
+}
+
+fn short_content_digest(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    hex_digest(&digest[..6])
+}
+
+fn value_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
 fn from_core_error(err: revdeck_core::RevDeckError) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
 }
@@ -2023,6 +5518,10 @@ fn json_from_sql_error(err: serde_json::Error) -> rusqlite::Error {
 
 fn string_from_sql_error(err: String, ty: rusqlite::types::Type) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, ty, err.into())
+}
+
+fn io_to_sql_error(err: std::io::Error) -> rusqlite::Error {
+    rusqlite::Error::ToSqlConversionFailure(Box::new(err))
 }
 
 fn sanitize_key_component(value: &str) -> String {
@@ -2050,6 +5549,22 @@ mod tests {
         let mut connection = Connection::open_in_memory().unwrap();
         migrate(&mut connection).unwrap();
         connection
+    }
+
+    fn artifact_record(object_ref: ObjectRef, display_name: &str) -> ArtifactRecord {
+        ArtifactRecord {
+            object_ref,
+            display_name: display_name.to_string(),
+            source_path: format!("fixtures/{display_name}"),
+            stored_path: None,
+            sha256: format!("{display_name}-sha256"),
+            size: 12,
+            kind: "binary".to_string(),
+            format: "elf".to_string(),
+            architecture: "x86_64".to_string(),
+            import_status: "indexed".to_string(),
+            created_at: datetime!(2026-05-13 00:00 UTC),
+        }
     }
 
     #[test]
@@ -2113,7 +5628,7 @@ mod tests {
             .insert(&NewAnalysisJob {
                 analysis_run_id: Some(run.id),
                 artifact_key: None,
-                pass_name: "parse".to_string(),
+                pass_name: "binary.parse".to_string(),
                 profile: "quick".to_string(),
                 status: "running".to_string(),
                 progress_current: 0,
@@ -2152,7 +5667,144 @@ mod tests {
 
         let recent = job_repo.list_recent(10).unwrap();
         assert_eq!(recent.len(), 1);
-        assert_eq!(recent[0].pass_name, "parse");
+        assert_eq!(recent[0].pass_name, "binary.parse");
+    }
+
+    #[test]
+    fn analysis_jobs_list_recent_for_artifact_filters_and_preserves_partial_status() {
+        let connection = migrated_connection();
+        let artifact_a = ObjectRef::artifact("aaa", "fixtures/a").unwrap();
+        let artifact_b = ObjectRef::artifact("bbb", "fixtures/b").unwrap();
+        let artifact_repo = ArtifactRepository::new(&connection);
+        artifact_repo
+            .upsert_artifact(&artifact_record(artifact_a.clone(), "a"))
+            .unwrap();
+        artifact_repo
+            .upsert_artifact(&artifact_record(artifact_b.clone(), "b"))
+            .unwrap();
+        let job_repo = AnalysisJobRepository::new(&connection);
+
+        for (artifact, pass_name, status, started_at, progress_total) in [
+            (
+                &artifact_a,
+                "binary.parse",
+                "succeeded",
+                datetime!(2026-05-13 00:00 UTC),
+                Some(1),
+            ),
+            (
+                &artifact_b,
+                "binary.triage",
+                "failed",
+                datetime!(2026-05-13 00:01 UTC),
+                Some(1),
+            ),
+            (
+                &artifact_a,
+                "binary.cfg",
+                "skipped",
+                datetime!(2026-05-13 00:02 UTC),
+                None,
+            ),
+            (
+                &artifact_a,
+                "binary.dataflow",
+                "running",
+                datetime!(2026-05-13 00:03 UTC),
+                None,
+            ),
+        ] {
+            job_repo
+                .insert(&NewAnalysisJob {
+                    analysis_run_id: None,
+                    artifact_key: Some(artifact.key.to_string()),
+                    pass_name: pass_name.to_string(),
+                    profile: "quick".to_string(),
+                    status: status.to_string(),
+                    progress_current: 0,
+                    progress_total,
+                    objects_produced: 0,
+                    diagnostics_count: 0,
+                    byte_limit: None,
+                    function_limit: None,
+                    time_limit_ms: None,
+                    metadata_json: "{}".to_string(),
+                    started_at,
+                })
+                .unwrap();
+        }
+
+        let recent = job_repo.list_recent_for_artifact(&artifact_a, 10).unwrap();
+
+        assert_eq!(recent.len(), 3);
+        assert!(recent
+            .iter()
+            .all(|job| job.artifact_key.as_deref() == Some(artifact_a.key.as_str())));
+        assert_eq!(recent[0].pass_name, "binary.dataflow");
+        assert_eq!(recent[0].status, "running");
+        assert!(recent[0].finished_at.is_none());
+        assert!(recent[0].progress_total.is_none());
+        assert!(recent.iter().any(|job| job.status == "skipped"));
+        assert!(recent.iter().all(|job| job.pass_name != "binary.triage"));
+
+        let limited = job_repo
+            .list_recent_by_artifact_key(artifact_a.key.as_str(), 2)
+            .unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].pass_name, "binary.dataflow");
+        assert_eq!(limited[1].pass_name, "binary.cfg");
+        assert!(job_repo
+            .list_recent_by_artifact_key("missing-artifact", 10)
+            .unwrap()
+            .is_empty());
+        assert!(job_repo
+            .list_recent_for_artifact(&artifact_a, 0)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn analysis_jobs_preserve_metadata_snippets_and_limits() {
+        let connection = migrated_connection();
+        let artifact = ObjectRef::artifact("snippet", "fixtures/snippet").unwrap();
+        ArtifactRepository::new(&connection)
+            .upsert_artifact(&artifact_record(artifact.clone(), "snippet"))
+            .unwrap();
+        let job_repo = AnalysisJobRepository::new(&connection);
+        let metadata_json = r#"{
+            "parameters":{"profile":"quick","native_cfg":false},
+            "diagnostic_snippets":["pass_skipped_by_profile: quick skipped cfg"],
+            "log_snippets":["cfg skipped by profile"],
+            "cfg_edges":0
+        }"#;
+
+        let job = job_repo
+            .insert(&NewAnalysisJob {
+                analysis_run_id: None,
+                artifact_key: Some(artifact.key.to_string()),
+                pass_name: "binary.cfg".to_string(),
+                profile: "quick".to_string(),
+                status: "skipped".to_string(),
+                progress_current: 0,
+                progress_total: None,
+                objects_produced: 0,
+                diagnostics_count: 1,
+                byte_limit: Some(4096),
+                function_limit: Some(50),
+                time_limit_ms: Some(1000),
+                metadata_json: metadata_json.to_string(),
+                started_at: datetime!(2026-05-13 00:00 UTC),
+            })
+            .unwrap();
+
+        let loaded = job_repo.get(job.id).unwrap().unwrap();
+
+        assert_eq!(loaded.byte_limit, Some(4096));
+        assert_eq!(loaded.function_limit, Some(50));
+        assert_eq!(loaded.time_limit_ms, Some(1000));
+        assert!(loaded.metadata_json.contains("parameters"));
+        assert!(loaded.metadata_json.contains("diagnostic_snippets"));
+        assert!(loaded.metadata_json.contains("log_snippets"));
     }
 
     #[test]

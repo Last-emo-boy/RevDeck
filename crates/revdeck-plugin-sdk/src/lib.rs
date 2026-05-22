@@ -8,8 +8,8 @@ pub use manifest::{
     UiContribution,
 };
 pub use object_batch::{
-    BatchProvenance, DiagnosticFact, DiagnosticSeverity, EdgeFact, ObjectBatch, ObjectBatchSummary,
-    ObjectFact, TypedAttribute,
+    lab_id_for_object_kind, BatchProvenance, DiagnosticFact, DiagnosticSeverity, EdgeFact,
+    ObjectBatch, ObjectBatchAudit, ObjectBatchSummary, ObjectFact, TypedAttribute,
 };
 pub use permissions::PermissionSet;
 pub use validation::{

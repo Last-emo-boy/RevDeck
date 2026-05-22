@@ -1,0 +1,4 @@
+{"type":"session","session_id":"malformed","label":"Malformed Trace"}
+{"type":"event","event_id":"good","thread_id":"main","event_kind":"call","timestamp_ns":1,"address":"0x401000","function":"main","message":"valid event"}
+{not-json
+{"type":"event","event_id":"bad-address","thread_id":"main","event_kind":"call","address":"not-hex","message":"bad address but imported"}

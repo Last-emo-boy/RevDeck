@@ -1,0 +1,33 @@
+{
+  "provenance": {
+    "plugin_id": "com.revdeck.examples.invalid-lab-write",
+    "plugin_version": "0.1.0",
+    "input_digest": "sha256:fixture"
+  },
+  "objects": [
+    {
+      "object_ref": {
+        "kind": "plugin_contribution",
+        "key": "plugin_contribution/lab=plugin/id=com.revdeck.examples.invalid-lab-write/report-context"
+      },
+      "display_name": "Invalid report context",
+      "metadata": {
+        "summary": "This fixture intentionally omits lab_write permission."
+      }
+    }
+  ],
+  "edges": [],
+  "attributes": [
+    {
+      "subject": {
+        "kind": "plugin_contribution",
+        "key": "plugin_contribution/lab=plugin/id=com.revdeck.examples.invalid-lab-write/report-context"
+      },
+      "namespace": "com.revdeck.examples.invalid-lab-write.report",
+      "schema_id": "plugin-contribution.v1",
+      "key": "auditable",
+      "value": true
+    }
+  ],
+  "diagnostics": []
+}

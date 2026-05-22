@@ -23,18 +23,22 @@ pub use commands::{
 };
 pub use error::{RevDeckError, RevDeckResult};
 pub use export::{
-    pre_export_validation, render_json, render_markdown, validate_export, ExportContext,
-    ExportValidationError, ExportValidationIssue, ExportValidationReport, Report, ReportFormat,
+    export_bundle, pre_export_validation, render_json, render_json_bundle, render_markdown,
+    validate_export, validation_report, ExportAnalysisJob, ExportBundle, ExportContext,
+    ExportEvidenceObject, ExportLabSummary, ExportPluginRun, ExportValidationError,
+    ExportValidationIssue, ExportValidationReport, Report, ReportFormat,
 };
-pub use findings::{Finding, FindingEvidence, FindingSeverity, FindingStatus};
+pub use findings::{lab_id_for_kind, Finding, FindingEvidence, FindingSeverity, FindingStatus};
 pub use memory::{Annotation, AnnotationEvidence, AnnotationKind};
 pub use navigation::{
-    BrokenObject, NavigationEntry, NavigationHistory, NavigationLens, SelectionContext,
+    BrokenObject, LabDescriptor, LabId, LabMaturity, NavigationEntry, NavigationHistory,
+    NavigationLens, SelectionContext, ALL_LABS, WORKSPACE_LENSES,
 };
 pub use object::{EdgeKind, ObjectKind, ObjectRef, StableObjectKey, StableObjectKeyBuilder};
 pub use query::{
-    InMemoryObjectGraph, LocalTraversal, ObjectGraphQuery, ObjectRelation, ObjectSearch,
-    ObjectSummary, QueryError, RelationDirection, TraversalNode, TraversalOptions,
+    EvidencePathItem, InMemoryObjectGraph, LocalTraversal, ObjectGraphQuery, ObjectRelation,
+    ObjectSearch, ObjectSummary, QueryError, RelationDirection, RelationFilter, TraversalNode,
+    TraversalOptions,
 };
 pub use radar::{
     filter_function_scores, score_function, score_functions, sort_function_scores,
@@ -44,6 +48,10 @@ pub use radar::{
     SIGNAL_XREF_COUNT,
 };
 pub use view_models::{
-    EvidenceNavigationItem, FunctionRadarRow, FunctionRadarViewModel, InspectorViewModel,
-    OverviewViewModel, ScoreReasonView, TriageActionRow, TriageBoardViewModel,
+    AnalysisJobDetail, AnalysisJobDetailItem, AnalysisJobRow, AnalysisJobsSummary,
+    DiffArtifactSnapshot, DiffChangeKind, DiffComparableObject, DiffComparableRelation,
+    DiffEntityKind, DiffRow, DiffSummaryViewModel, EvidenceNavigationItem, FunctionRadarRow,
+    FunctionRadarViewModel, GraphEdgeDetail, GraphLabViewModel, GraphPathRow,
+    GraphRelationFilterRow, InspectorViewModel, LabSummary, LatestAnalysisJob, OverviewViewModel,
+    ScoreReasonView, TriageActionRow, TriageBoardViewModel,
 };

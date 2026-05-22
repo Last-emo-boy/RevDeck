@@ -22,6 +22,17 @@
       "display_name": "main",
       "address": 4198400,
       "metadata": {}
+    },
+    {
+      "object_ref": {
+        "kind": "plugin_contribution",
+        "key": "plugin_contribution/lab=plugin/id=com.revdeck.examples.valid-minimal/report-context"
+      },
+      "display_name": "Valid Minimal report context",
+      "metadata": {
+        "summary": "Fixture plugin contribution for Plugin Lab dry-run audit",
+        "capability": "minimal-report-contributor"
+      }
     }
   ],
   "edges": [
@@ -37,6 +48,21 @@
       "kind": "contains",
       "confidence": 1.0,
       "metadata": {}
+    },
+    {
+      "source": {
+        "kind": "plugin_contribution",
+        "key": "plugin_contribution/lab=plugin/id=com.revdeck.examples.valid-minimal/report-context"
+      },
+      "target": {
+        "kind": "function",
+        "key": "function/artifact=fixture/va=0x0000000000401000"
+      },
+      "kind": "contributes",
+      "confidence": 0.9,
+      "metadata": {
+        "reason": "fixture report context links back to imported function"
+      }
     }
   ],
   "attributes": [
@@ -49,7 +75,23 @@
       "schema_id": "function-summary.v1",
       "key": "source",
       "value": "fixture"
+    },
+    {
+      "subject": {
+        "kind": "plugin_contribution",
+        "key": "plugin_contribution/lab=plugin/id=com.revdeck.examples.valid-minimal/report-context"
+      },
+      "namespace": "com.revdeck.examples.valid-minimal.report",
+      "schema_id": "plugin-contribution.v1",
+      "key": "auditable",
+      "value": true
     }
   ],
-  "diagnostics": []
+  "diagnostics": [
+    {
+      "severity": "info",
+      "code": "fixture_replay",
+      "message": "Plugin Lab fixture generated one report contribution."
+    }
+  ]
 }

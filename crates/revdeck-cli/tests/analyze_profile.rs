@@ -57,13 +57,23 @@ fn analyze_quick_profile_reports_skipped_native_cfg_diagnostic() {
         .clone();
     let json: Value = serde_json::from_slice(&output).unwrap();
     let jobs = json["jobs"].as_array().unwrap();
+    let parse = jobs
+        .iter()
+        .find(|job| job["pass_name"] == "binary.parse")
+        .unwrap();
+    assert_eq!(parse["status"], "succeeded");
+    assert_eq!(parse["metadata"]["lab_id"], "binary");
+    assert_eq!(parse["metadata"]["pass_phase"], "parse");
+
+    let cfg = jobs
+        .iter()
+        .find(|job| job["pass_name"] == "binary.cfg")
+        .unwrap();
+    assert_eq!(cfg["status"], "skipped");
+    assert_eq!(cfg["metadata"]["lab_id"], "binary");
+    assert_eq!(cfg["metadata"]["pass_phase"], "cfg");
+
     assert!(jobs
         .iter()
-        .any(|job| job["pass_name"] == "parse" && job["status"] == "succeeded"));
-    assert!(jobs
-        .iter()
-        .any(|job| job["pass_name"] == "cfg" && job["status"] == "skipped"));
-    assert!(jobs
-        .iter()
-        .any(|job| job["pass_name"] == "triage" && job["status"] == "succeeded"));
+        .any(|job| job["pass_name"] == "binary.triage" && job["status"] == "succeeded"));
 }

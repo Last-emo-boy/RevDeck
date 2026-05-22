@@ -807,14 +807,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "revdeck-crash-tests"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "revdeck-core",
+ "revdeck-db",
+ "serde_json",
+ "tempfile",
+ "time",
+]
+
+[[package]]
 name = "revdeck-db"
 version = "0.1.0"
 dependencies = [
  "revdeck-core",
  "rusqlite",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
+ "time",
+]
+
+[[package]]
+name = "revdeck-diff-tests"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "revdeck-core",
+ "revdeck-db",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
  "time",
 ]
 
@@ -826,6 +852,18 @@ dependencies = [
  "revdeck-db",
  "rusqlite",
  "serde_json",
+ "time",
+]
+
+[[package]]
+name = "revdeck-firmware-tests"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "revdeck-core",
+ "revdeck-db",
+ "serde_json",
+ "tempfile",
  "time",
 ]
 
@@ -916,6 +954,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "revdeck-protocol-tests"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "revdeck-core",
+ "revdeck-db",
+ "serde_json",
+ "tempfile",
+ "time",
+]
+
+[[package]]
 name = "revdeck-radar-tests"
 version = "0.1.0"
 dependencies = [
@@ -924,6 +974,19 @@ dependencies = [
  "revdeck-index",
  "rusqlite",
  "tempfile",
+]
+
+[[package]]
+name = "revdeck-trace-tests"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "revdeck-core",
+ "revdeck-db",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "time",
 ]
 
 [[package]]

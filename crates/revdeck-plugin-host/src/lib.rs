@@ -7,13 +7,13 @@ use revdeck_db::{
 };
 use revdeck_plugin_sdk::{
     digest_json, validate_manifest_toml, validate_object_batch, DiagnosticFact, EdgeFact,
-    ManifestSummary, ObjectBatch, ObjectBatchSummary, ObjectFact, PluginManifest, TypedAttribute,
-    ValidationReport,
+    ManifestSummary, ObjectBatch, ObjectBatchAudit, ObjectBatchSummary, ObjectFact, PluginManifest,
+    TypedAttribute, ValidationReport,
 };
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{fs, path::Path};
+use std::{collections::BTreeSet, fs, path::Path};
 use time::OffsetDateTime;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +29,7 @@ pub struct PluginTestOutput {
     pub status: &'static str,
     pub manifest_digest: String,
     pub object_batch: Option<ObjectBatchSummary>,
+    pub dry_run: Option<ObjectBatchAudit>,
     pub validation: ValidationReport,
 }
 
@@ -46,6 +47,7 @@ pub struct PluginCommitOutput {
     pub manifest_digest: String,
     pub plugin_run_id: Option<i64>,
     pub object_batch: Option<ObjectBatchSummary>,
+    pub audit: Option<ObjectBatchAudit>,
     pub committed: Option<PluginCommitSummary>,
     pub validation: ValidationReport,
 }
@@ -57,6 +59,7 @@ pub struct PluginRunOutput {
     pub manifest_digest: String,
     pub plugin_run_id: Option<i64>,
     pub object_batch: Option<ObjectBatchSummary>,
+    pub audit: Option<ObjectBatchAudit>,
     pub committed: Option<PluginCommitSummary>,
     pub validation: ValidationReport,
 }
@@ -106,6 +109,7 @@ pub fn test_plugin_directory(path: &Path) -> Result<PluginTestOutput> {
         },
         manifest_digest: loaded.manifest_digest,
         object_batch: loaded.batch.as_ref().map(ObjectBatch::summary),
+        dry_run: loaded.batch.as_ref().map(ObjectBatch::audit),
         validation: loaded.validation,
     })
 }
@@ -130,6 +134,7 @@ pub fn run_plugin_directory(
             manifest_digest: output.manifest_digest,
             plugin_run_id: output.plugin_run_id,
             object_batch: output.object_batch,
+            audit: output.audit,
             committed: output.committed,
             validation: output.validation,
         });
@@ -148,6 +153,7 @@ pub fn run_plugin_directory(
         manifest_digest: loaded.manifest_digest,
         plugin_run_id: Some(run.id),
         object_batch: loaded.batch.as_ref().map(ObjectBatch::summary),
+        audit: loaded.batch.as_ref().map(ObjectBatch::audit),
         committed: None,
         validation: loaded.validation,
     })
@@ -171,6 +177,7 @@ fn load_plugin_directory(path: &Path) -> Result<LoadedPluginDirectory> {
         let batch_report = validate_object_batch(&batch);
         validation.errors.extend(batch_report.errors);
         validation.warnings.extend(batch_report.warnings);
+        validate_lab_write_permissions(&manifest, &batch, &mut validation);
         Some(batch)
     } else {
         validation.warning(
@@ -200,6 +207,7 @@ fn commit_loaded_plugin(
 ) -> Result<PluginCommitOutput> {
     let mut validation = loaded.validation.clone();
     let batch = loaded.batch.as_ref();
+    let audit = batch.map(ObjectBatch::audit);
     if batch.is_none() {
         validation.error(
             "missing_object_batch",
@@ -218,12 +226,14 @@ fn commit_loaded_plugin(
     let run = insert_plugin_run(project, &loaded, run_status, &validation)?;
 
     if !validation.is_valid() {
-        let finished = finish_plugin_run(project, run.id, "failed", &validation, None)?;
+        let finished =
+            finish_plugin_run(project, run.id, "failed", &validation, None, audit.as_ref())?;
         return Ok(PluginCommitOutput {
             status: "failed",
             manifest_digest: loaded.manifest_digest,
             plugin_run_id: Some(finished.id),
             object_batch: batch.map(ObjectBatch::summary),
+            audit,
             committed: None,
             validation,
         });
@@ -232,25 +242,34 @@ fn commit_loaded_plugin(
     let batch = batch.expect("validated batch exists");
     match commit_object_batch(project, batch, run.id) {
         Ok(summary) => {
-            let finished =
-                finish_plugin_run(project, run.id, "succeeded", &validation, Some(&summary))?;
+            let finished = finish_plugin_run(
+                project,
+                run.id,
+                "succeeded",
+                &validation,
+                Some(&summary),
+                audit.as_ref(),
+            )?;
             Ok(PluginCommitOutput {
                 status: "succeeded",
                 manifest_digest: loaded.manifest_digest,
                 plugin_run_id: Some(finished.id),
                 object_batch: Some(batch.summary()),
+                audit,
                 committed: Some(summary),
                 validation,
             })
         }
         Err(err) => {
             validation.error("object_batch_commit_failed", err.to_string());
-            let finished = finish_plugin_run(project, run.id, "failed", &validation, None)?;
+            let finished =
+                finish_plugin_run(project, run.id, "failed", &validation, None, audit.as_ref())?;
             Ok(PluginCommitOutput {
                 status: "failed",
                 manifest_digest: loaded.manifest_digest,
                 plugin_run_id: Some(finished.id),
                 object_batch: Some(batch.summary()),
+                audit,
                 committed: None,
                 validation,
             })
@@ -288,6 +307,33 @@ fn validate_commit_permissions(
             "plugin_version_mismatch",
             "object batch provenance plugin_version must match manifest plugin.version",
         );
+    }
+}
+
+fn validate_lab_write_permissions(
+    manifest: &PluginManifest,
+    batch: &ObjectBatch,
+    validation: &mut ValidationReport,
+) {
+    let touched_labs = batch
+        .audit()
+        .touched_labs
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    for lab in touched_labs {
+        if !manifest
+            .permissions
+            .lab_write
+            .iter()
+            .any(|candidate| candidate == "all" || candidate == &lab)
+        {
+            validation.error(
+                "missing_lab_write_permission",
+                format!(
+                    "plugin must request lab_write `{lab}` or `all` to contribute Lab evidence"
+                ),
+            );
+        }
     }
 }
 
@@ -547,7 +593,15 @@ fn insert_and_finish_run(
 ) -> Result<PluginRunRecord> {
     let validation = loaded.validation.clone();
     let run = insert_plugin_run(project, loaded, "running", &validation)?;
-    finish_plugin_run(project, run.id, status, &validation, summary)
+    let audit = loaded.batch.as_ref().map(ObjectBatch::audit);
+    finish_plugin_run(
+        project,
+        run.id,
+        status,
+        &validation,
+        summary,
+        audit.as_ref(),
+    )
 }
 
 fn insert_plugin_run(
@@ -585,10 +639,12 @@ fn finish_plugin_run(
     status: &str,
     validation: &ValidationReport,
     summary: Option<&PluginCommitSummary>,
+    audit: Option<&ObjectBatchAudit>,
 ) -> Result<PluginRunRecord> {
     let repo = PluginRunRepository::new(project.connection());
     let diagnostics_json = serde_json::to_string(&serde_json::json!({
         "validation": validation,
+        "audit": audit,
         "committed": summary,
     }))
     .context("failed to serialize plugin run diagnostics")?;

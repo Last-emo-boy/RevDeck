@@ -1,0 +1,25 @@
+{
+  "type": "crash",
+  "crash_id": "asan-uaf-001",
+  "label": "ASAN heap-use-after-free in main",
+  "sanitizer": "asan",
+  "crash_class": "heap-use-after-free",
+  "signal": "SIGABRT",
+  "message": "AddressSanitizer detected heap-use-after-free while handling a request",
+  "frames": [
+    {
+      "module": "firmware.elf",
+      "function": "main",
+      "address": "0x401010",
+      "offset": "0x10",
+      "source": "main.c:42"
+    },
+    {
+      "module": "firmware.elf",
+      "function": "parse_request",
+      "address": "0x401040",
+      "offset": "0x40",
+      "source": "http.c:88"
+    }
+  ]
+}

@@ -1,10 +1,11 @@
 use revdeck_core::{
-    pre_export_validation, render_json, render_markdown, Finding, FindingEvidence, FindingSeverity,
-    FindingStatus, ObjectKind, ObjectRef, StableObjectKey,
+    pre_export_validation, render_json, render_json_bundle, render_markdown, ExportBundle, Finding,
+    FindingEvidence, FindingSeverity, FindingStatus, ObjectKind, ObjectRef, StableObjectKey,
 };
 use revdeck_db::{
-    migrations::migrate, ArtifactRecord, ArtifactRepository, FindingRepository, FunctionRecord,
-    IndexRepository, MemoryRepository, ObjectRepository, StoredObject,
+    migrations::migrate, AnalysisJobRepository, ArtifactRecord, ArtifactRepository,
+    FindingRepository, FunctionRecord, IndexRepository, MemoryRepository, NewAnalysisJob,
+    NewPluginRun, ObjectRepository, PluginRunRepository, StoredObject,
 };
 use rusqlite::Connection;
 use time::macros::datetime;
@@ -108,6 +109,127 @@ fn seed_finding(connection: &Connection, function: &ObjectRef, finding_ref: &Obj
         .unwrap();
 }
 
+fn seed_trace_finding(
+    connection: &Connection,
+    artifact: &ObjectRef,
+    trace_event: &ObjectRef,
+    finding_ref: &ObjectRef,
+) {
+    ObjectRepository::new(connection)
+        .upsert_object(&StoredObject {
+            object_ref: trace_event.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some("trace event #4".to_string()),
+            address: None,
+            size: None,
+            source_run_id: None,
+            metadata_json: r#"{"lab_id":"trace","session":"session-1"}"#.to_string(),
+        })
+        .unwrap();
+    FindingRepository::new(connection)
+        .upsert_finding(&Finding {
+            object_ref: finding_ref.clone(),
+            title: "Runtime trace reaches auth gate".to_string(),
+            severity: FindingSeverity::Medium,
+            status: FindingStatus::Confirmed,
+            summary: "Trace event correlates runtime behavior with auth_gate.".to_string(),
+            body: String::new(),
+            tags: vec!["trace".to_string()],
+            evidence: vec![FindingEvidence::new(
+                trace_event.clone(),
+                "runtime",
+                0,
+                "runtime event is preserved as cross-lab evidence",
+                None,
+            )],
+            created_at: datetime!(2026-05-13 00:05 UTC),
+            updated_at: datetime!(2026-05-13 00:06 UTC),
+        })
+        .unwrap();
+}
+
+fn seed_plugin_finding(
+    connection: &Connection,
+    artifact: &ObjectRef,
+    plugin_evidence: &ObjectRef,
+    finding_ref: &ObjectRef,
+    plugin_run_id: i64,
+) {
+    ObjectRepository::new(connection)
+        .upsert_object(&StoredObject {
+            object_ref: plugin_evidence.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some("plugin contribution".to_string()),
+            address: None,
+            size: None,
+            source_run_id: None,
+            metadata_json: format!(
+                r#"{{"lab_id":"plugin","plugin_run_id":{plugin_run_id},"namespace":"demo"}}"#
+            ),
+        })
+        .unwrap();
+    FindingRepository::new(connection)
+        .upsert_finding(&Finding {
+            object_ref: finding_ref.clone(),
+            title: "Plugin contribution flags auth gate".to_string(),
+            severity: FindingSeverity::Low,
+            status: FindingStatus::Confirmed,
+            summary: "Plugin output is retained with run provenance.".to_string(),
+            body: String::new(),
+            tags: vec!["plugin".to_string()],
+            evidence: vec![FindingEvidence::new(
+                plugin_evidence.clone(),
+                "plugin",
+                0,
+                "plugin evidence keeps manifest and diagnostics lineage",
+                None,
+            )],
+            created_at: datetime!(2026-05-13 00:09 UTC),
+            updated_at: datetime!(2026-05-13 00:10 UTC),
+        })
+        .unwrap();
+}
+
+fn seed_analysis_job(connection: &Connection, artifact: &ObjectRef, status: &str) {
+    AnalysisJobRepository::new(connection)
+        .insert(&NewAnalysisJob {
+            analysis_run_id: None,
+            artifact_key: Some(artifact.key.to_string()),
+            pass_name: format!("binary.{status}"),
+            profile: "balanced".to_string(),
+            status: status.to_string(),
+            progress_current: 1,
+            progress_total: Some(1),
+            objects_produced: 1,
+            diagnostics_count: u64::from(status != "succeeded"),
+            byte_limit: Some(1024),
+            function_limit: Some(16),
+            time_limit_ms: Some(500),
+            metadata_json: format!(r#"{{"status":"{status}","diagnostics":["fixture"]}}"#),
+            started_at: datetime!(2026-05-13 00:08 UTC),
+        })
+        .unwrap();
+}
+
+fn seed_plugin_run(connection: &Connection, status: &str) -> i64 {
+    PluginRunRepository::new(connection)
+        .insert(&NewPluginRun {
+            analysis_run_id: None,
+            plugin_id: "com.example.auth".to_string(),
+            plugin_version: "0.1.0".to_string(),
+            manifest_digest: "manifest-digest".to_string(),
+            input_digest: "input-digest".to_string(),
+            config_digest: Some("config-digest".to_string()),
+            status: status.to_string(),
+            permissions_json: r#"{"lab_read":["binary-triage"],"lab_write":["plugin"]}"#
+                .to_string(),
+            diagnostics_json: r#"[{"severity":"info","message":"fixture"}]"#.to_string(),
+            started_at: datetime!(2026-05-13 00:08 UTC),
+        })
+        .unwrap()
+        .id
+}
+
 #[test]
 fn findings_evidence() {
     let connection = migrated_connection();
@@ -158,6 +280,8 @@ fn export_markdown_golden() {
     let expected = format!(
         "# RevDeck Findings Report\n\n\
 Generated: 2026-05-13 0:04:00.0 +00:00:00\n\n\
+## Lab Coverage\n\n\
+- `binary-triage`: findings=1 evidence=1\n\n\
 ## Auth gate accepts weak credential path\n\n\
 - Severity: high\n\
 - Status: confirmed\n\
@@ -169,4 +293,188 @@ Evidence is linked by stable ObjectRef and analyst rename context.\n\n\
 - `{function}` (primary) - auth_gate: renamed function remains evidence\n\n"
     );
     assert_eq!(markdown, expected);
+}
+
+#[test]
+fn export_json_bundle_preserves_cross_lab_evidence_context() {
+    let connection = migrated_connection();
+    let (artifact, _, _) = seed_project(&connection);
+    let trace_event = ObjectRef::lab_object(
+        ObjectKind::TraceEvent,
+        Some(&artifact.key),
+        "trace",
+        "session-1/event-4",
+    )
+    .unwrap();
+    let finding = ObjectRef::new(
+        ObjectKind::Finding,
+        StableObjectKey::finding("runtime-auth-gate", "2026-05-13T00:05:00Z").unwrap(),
+    );
+    seed_trace_finding(&connection, &artifact, &trace_event, &finding);
+    let context = FindingRepository::new(&connection)
+        .export_context(datetime!(2026-05-13 00:07 UTC))
+        .unwrap();
+
+    let validation = pre_export_validation(&context).unwrap();
+    assert!(validation.is_valid());
+
+    let json = render_json_bundle(&context).unwrap();
+    let bundle: ExportBundle = serde_json::from_str(&json).unwrap();
+    assert_eq!(bundle.report.findings.len(), 1);
+    assert_eq!(bundle.report.findings[0].evidence[0].evidence, trace_event);
+    assert_eq!(bundle.evidence_objects.len(), 1);
+    assert_eq!(bundle.evidence_objects[0].lab_id.as_deref(), Some("trace"));
+    assert_eq!(
+        bundle.evidence_objects[0].artifact_key.as_deref(),
+        Some(artifact.key.as_str())
+    );
+    assert_eq!(bundle.lab_summaries.len(), 1);
+    assert_eq!(bundle.lab_summaries[0].lab_id, "trace");
+    assert_eq!(bundle.lab_summaries[0].findings, 1);
+    assert_eq!(bundle.lab_summaries[0].evidence_objects, 1);
+
+    let markdown = render_markdown(&context);
+    assert!(markdown.contains("[trace]: runtime event is preserved"));
+}
+
+#[test]
+fn export_bundle_includes_analysis_jobs_and_warns_on_skipped_jobs() {
+    let connection = migrated_connection();
+    let (artifact, function, finding) = seed_project(&connection);
+    seed_finding(&connection, &function, &finding);
+    seed_analysis_job(&connection, &artifact, "skipped");
+
+    let context = FindingRepository::new(&connection)
+        .export_context(datetime!(2026-05-13 00:11 UTC))
+        .unwrap();
+    let validation = pre_export_validation(&context).unwrap();
+
+    assert_eq!(context.analysis_jobs.len(), 1);
+    assert_eq!(context.analysis_jobs[0].status, "skipped");
+    assert!(validation
+        .warnings
+        .iter()
+        .any(|issue| issue.code == "skipped_analysis_job"));
+
+    let bundle: ExportBundle =
+        serde_json::from_str(&render_json_bundle(&context).unwrap()).unwrap();
+    assert_eq!(bundle.analysis_jobs.len(), 1);
+    assert_eq!(bundle.validation.warnings[0].code, "skipped_analysis_job");
+}
+
+#[test]
+fn export_release_gate_fails_on_failed_analysis_job() {
+    let connection = migrated_connection();
+    let (artifact, function, finding) = seed_project(&connection);
+    seed_finding(&connection, &function, &finding);
+    seed_analysis_job(&connection, &artifact, "failed");
+
+    let context = FindingRepository::new(&connection)
+        .export_context(datetime!(2026-05-13 00:11 UTC))
+        .unwrap();
+    let error = pre_export_validation(&context).unwrap_err();
+
+    assert!(error
+        .report
+        .errors
+        .iter()
+        .any(|issue| issue.code == "failed_analysis_job"));
+}
+
+#[test]
+fn export_bundle_includes_plugin_run_provenance() {
+    let connection = migrated_connection();
+    let (artifact, _, _) = seed_project(&connection);
+    let plugin_run_id = seed_plugin_run(&connection, "succeeded");
+    let plugin_evidence = ObjectRef::lab_object(
+        ObjectKind::PluginContribution,
+        Some(&artifact.key),
+        "plugin",
+        "auth-score",
+    )
+    .unwrap();
+    let finding = ObjectRef::new(
+        ObjectKind::Finding,
+        StableObjectKey::finding("plugin-auth-score", "2026-05-13T00:09:00Z").unwrap(),
+    );
+    seed_plugin_finding(
+        &connection,
+        &artifact,
+        &plugin_evidence,
+        &finding,
+        plugin_run_id,
+    );
+
+    let context = FindingRepository::new(&connection)
+        .export_context(datetime!(2026-05-13 00:12 UTC))
+        .unwrap();
+    let validation = pre_export_validation(&context).unwrap();
+    assert!(validation.is_valid());
+
+    let bundle: ExportBundle =
+        serde_json::from_str(&render_json_bundle(&context).unwrap()).unwrap();
+    assert_eq!(bundle.plugin_runs.len(), 1);
+    assert_eq!(bundle.plugin_runs[0].id, plugin_run_id);
+    assert_eq!(bundle.plugin_runs[0].plugin_id, "com.example.auth");
+    assert_eq!(bundle.evidence_objects[0].lab_id.as_deref(), Some("plugin"));
+    assert!(bundle.validation.errors.is_empty());
+}
+
+#[test]
+fn export_release_gate_fails_on_orphan_plugin_output() {
+    let connection = migrated_connection();
+    let (artifact, _, _) = seed_project(&connection);
+    let plugin_evidence = ObjectRef::lab_object(
+        ObjectKind::PluginContribution,
+        Some(&artifact.key),
+        "plugin",
+        "orphan-output",
+    )
+    .unwrap();
+    let finding = ObjectRef::new(
+        ObjectKind::Finding,
+        StableObjectKey::finding("orphan-plugin-output", "2026-05-13T00:09:00Z").unwrap(),
+    );
+    ObjectRepository::new(&connection)
+        .upsert_object(&StoredObject {
+            object_ref: plugin_evidence.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some("orphan plugin output".to_string()),
+            address: None,
+            size: None,
+            source_run_id: None,
+            metadata_json: r#"{"lab_id":"plugin"}"#.to_string(),
+        })
+        .unwrap();
+    FindingRepository::new(&connection)
+        .upsert_finding(&Finding {
+            object_ref: finding,
+            title: "Orphan plugin output".to_string(),
+            severity: FindingSeverity::Low,
+            status: FindingStatus::Confirmed,
+            summary: "Plugin output without provenance must not ship.".to_string(),
+            body: String::new(),
+            tags: vec!["plugin".to_string()],
+            evidence: vec![FindingEvidence::new(
+                plugin_evidence,
+                "plugin",
+                0,
+                "missing plugin_run_id",
+                None,
+            )],
+            created_at: datetime!(2026-05-13 00:09 UTC),
+            updated_at: datetime!(2026-05-13 00:10 UTC),
+        })
+        .unwrap();
+
+    let context = FindingRepository::new(&connection)
+        .export_context(datetime!(2026-05-13 00:12 UTC))
+        .unwrap();
+    let error = pre_export_validation(&context).unwrap_err();
+
+    assert!(error
+        .report
+        .errors
+        .iter()
+        .any(|issue| issue.code == "orphan_plugin_output"));
 }

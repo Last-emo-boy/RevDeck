@@ -1,7 +1,7 @@
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 12;
 
 pub const MIGRATION_0001: &str = include_str!("../migrations/0001_foundation.sql");
 pub const MIGRATION_0002: &str = include_str!("../migrations/0002_binary_index.sql");
@@ -11,6 +11,10 @@ pub const MIGRATION_0005: &str = include_str!("../migrations/0005_plugin_runs.sq
 pub const MIGRATION_0006: &str = include_str!("../migrations/0006_plugin_contributions.sql");
 pub const MIGRATION_0007: &str = include_str!("../migrations/0007_native_cfg.sql");
 pub const MIGRATION_0008: &str = include_str!("../migrations/0008_analysis_jobs.sql");
+pub const MIGRATION_0009: &str = include_str!("../migrations/0009_trace_lab.sql");
+pub const MIGRATION_0010: &str = include_str!("../migrations/0010_firmware_lab.sql");
+pub const MIGRATION_0011: &str = include_str!("../migrations/0011_crash_lab.sql");
+pub const MIGRATION_0012: &str = include_str!("../migrations/0012_protocol_lab.sql");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Migration {
@@ -59,6 +63,26 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 8,
         name: "analysis_jobs",
         sql: MIGRATION_0008,
+    },
+    Migration {
+        version: 9,
+        name: "trace_lab",
+        sql: MIGRATION_0009,
+    },
+    Migration {
+        version: 10,
+        name: "firmware_lab",
+        sql: MIGRATION_0010,
+    },
+    Migration {
+        version: 11,
+        name: "crash_lab",
+        sql: MIGRATION_0011,
+    },
+    Migration {
+        version: 12,
+        name: "protocol_lab",
+        sql: MIGRATION_0012,
     },
 ];
 
@@ -148,6 +172,14 @@ mod tests {
             "instructions",
             "cfg_edges",
             "analysis_jobs",
+            "trace_sessions",
+            "trace_events",
+            "firmware_files",
+            "crash_reports",
+            "crash_frames",
+            "protocol_samples",
+            "protocol_messages",
+            "protocol_fields",
         ] {
             assert!(table_names.contains(table), "missing table {table}");
         }

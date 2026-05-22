@@ -1,0 +1,38 @@
+{
+  "type": "protocol",
+  "sample_id": "login-handshake",
+  "label": "Login handshake",
+  "schema_hypothesis": "login request: opcode, length, ascii credential",
+  "messages": [
+    {
+      "message_id": "client-hello",
+      "direction": "client_to_server",
+      "payload_hex": "010e61646d696e2070617373776f7264",
+      "schema_hypothesis": "opcode plus credential string",
+      "fields": [
+        {
+          "name": "opcode",
+          "offset": 0,
+          "length": 1,
+          "type": "integer",
+          "confidence": "annotated"
+        },
+        {
+          "name": "credential_len",
+          "offset": 1,
+          "length": 1,
+          "type": "integer",
+          "confidence": "annotated"
+        },
+        {
+          "name": "credential",
+          "offset": 2,
+          "length": 14,
+          "type": "string",
+          "confidence": "annotated",
+          "string_hint": "admin password"
+        }
+      ]
+    }
+  ]
+}

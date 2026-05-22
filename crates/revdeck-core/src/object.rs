@@ -21,6 +21,16 @@ pub enum ObjectKind {
     Score,
     Annotation,
     Finding,
+    TraceSession,
+    TraceEvent,
+    FirmwareFile,
+    CrashReport,
+    CrashFrame,
+    ProtocolSample,
+    ProtocolMessage,
+    ProtocolField,
+    DiffDelta,
+    PluginContribution,
 }
 
 impl ObjectKind {
@@ -41,7 +51,33 @@ impl ObjectKind {
             Self::Score => "score",
             Self::Annotation => "annotation",
             Self::Finding => "finding",
+            Self::TraceSession => "trace_session",
+            Self::TraceEvent => "trace_event",
+            Self::FirmwareFile => "firmware_file",
+            Self::CrashReport => "crash_report",
+            Self::CrashFrame => "crash_frame",
+            Self::ProtocolSample => "protocol_sample",
+            Self::ProtocolMessage => "protocol_message",
+            Self::ProtocolField => "protocol_field",
+            Self::DiffDelta => "diff_delta",
+            Self::PluginContribution => "plugin_contribution",
         }
+    }
+
+    pub const fn is_lab_evidence(self) -> bool {
+        matches!(
+            self,
+            Self::TraceSession
+                | Self::TraceEvent
+                | Self::FirmwareFile
+                | Self::CrashReport
+                | Self::CrashFrame
+                | Self::ProtocolSample
+                | Self::ProtocolMessage
+                | Self::ProtocolField
+                | Self::DiffDelta
+                | Self::PluginContribution
+        )
     }
 }
 
@@ -71,6 +107,16 @@ impl FromStr for ObjectKind {
             "score" => Ok(Self::Score),
             "annotation" => Ok(Self::Annotation),
             "finding" => Ok(Self::Finding),
+            "trace_session" => Ok(Self::TraceSession),
+            "trace_event" => Ok(Self::TraceEvent),
+            "firmware_file" => Ok(Self::FirmwareFile),
+            "crash_report" => Ok(Self::CrashReport),
+            "crash_frame" => Ok(Self::CrashFrame),
+            "protocol_sample" => Ok(Self::ProtocolSample),
+            "protocol_message" => Ok(Self::ProtocolMessage),
+            "protocol_field" => Ok(Self::ProtocolField),
+            "diff_delta" => Ok(Self::DiffDelta),
+            "plugin_contribution" => Ok(Self::PluginContribution),
             other => Err(RevDeckError::InvalidObjectKeyComponent {
                 component: "object_kind".to_string(),
                 reason: format!("unknown kind `{other}`"),
@@ -92,6 +138,11 @@ pub enum EdgeKind {
     Annotates,
     EvidenceFor,
     DerivedFrom,
+    Correlates,
+    Timeline,
+    DiffersFrom,
+    ClustersWith,
+    Contributes,
 }
 
 impl EdgeKind {
@@ -107,6 +158,11 @@ impl EdgeKind {
             Self::Annotates => "annotates",
             Self::EvidenceFor => "evidence_for",
             Self::DerivedFrom => "derived_from",
+            Self::Correlates => "correlates",
+            Self::Timeline => "timeline",
+            Self::DiffersFrom => "differs_from",
+            Self::ClustersWith => "clusters_with",
+            Self::Contributes => "contributes",
         }
     }
 
@@ -122,6 +178,11 @@ impl EdgeKind {
             Self::Annotates => "ANNOTATES",
             Self::EvidenceFor => "EVIDENCE_FOR",
             Self::DerivedFrom => "DERIVED_FROM",
+            Self::Correlates => "CORRELATES",
+            Self::Timeline => "TIMELINE",
+            Self::DiffersFrom => "DIFFERS_FROM",
+            Self::ClustersWith => "CLUSTERS_WITH",
+            Self::Contributes => "CONTRIBUTES",
         }
     }
 }
@@ -147,6 +208,11 @@ impl FromStr for EdgeKind {
             "annotates" => Ok(Self::Annotates),
             "evidence_for" => Ok(Self::EvidenceFor),
             "derived_from" => Ok(Self::DerivedFrom),
+            "correlates" => Ok(Self::Correlates),
+            "timeline" => Ok(Self::Timeline),
+            "differs_from" => Ok(Self::DiffersFrom),
+            "clusters_with" => Ok(Self::ClustersWith),
+            "contributes" => Ok(Self::Contributes),
             other => Err(RevDeckError::InvalidObjectKeyComponent {
                 component: "edge_kind".to_string(),
                 reason: format!("unknown kind `{other}`"),
@@ -339,6 +405,19 @@ impl StableObjectKey {
             .finish()
     }
 
+    pub fn lab_object(
+        kind: ObjectKind,
+        artifact_key: Option<&StableObjectKey>,
+        lab_id: &str,
+        local_id: &str,
+    ) -> RevDeckResult<Self> {
+        let mut builder = StableObjectKeyBuilder::new(kind).component("lab", lab_id)?;
+        if let Some(artifact_key) = artifact_key {
+            builder = builder.component("artifact", artifact_key.as_str())?;
+        }
+        builder.component("id", local_id)?.finish()
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -373,6 +452,18 @@ impl ObjectRef {
         Ok(Self::new(
             ObjectKind::Artifact,
             StableObjectKey::artifact(content_sha256, normalized_path)?,
+        ))
+    }
+
+    pub fn lab_object(
+        kind: ObjectKind,
+        artifact_key: Option<&StableObjectKey>,
+        lab_id: &str,
+        local_id: &str,
+    ) -> RevDeckResult<Self> {
+        Ok(Self::new(
+            kind,
+            StableObjectKey::lab_object(kind, artifact_key, lab_id, local_id)?,
         ))
     }
 }
@@ -571,6 +662,84 @@ mod tests {
         for key in keys {
             assert!(!key.as_str().is_empty());
             assert!(!key.as_str().contains('\\'));
+        }
+    }
+
+    #[test]
+    fn lab_object_kinds_round_trip_through_display() {
+        let kinds = [
+            ObjectKind::TraceSession,
+            ObjectKind::TraceEvent,
+            ObjectKind::FirmwareFile,
+            ObjectKind::CrashReport,
+            ObjectKind::CrashFrame,
+            ObjectKind::ProtocolSample,
+            ObjectKind::ProtocolMessage,
+            ObjectKind::ProtocolField,
+            ObjectKind::DiffDelta,
+            ObjectKind::PluginContribution,
+        ];
+
+        for kind in kinds {
+            assert_eq!(kind.as_str().parse::<ObjectKind>().unwrap(), kind);
+            assert!(kind.is_lab_evidence());
+        }
+    }
+
+    #[test]
+    fn lab_edge_kinds_round_trip_through_display() {
+        let kinds = [
+            EdgeKind::Correlates,
+            EdgeKind::Timeline,
+            EdgeKind::DiffersFrom,
+            EdgeKind::ClustersWith,
+            EdgeKind::Contributes,
+        ];
+
+        for kind in kinds {
+            assert_eq!(kind.as_str().parse::<EdgeKind>().unwrap(), kind);
+            assert_eq!(kind.label(), kind.label().to_ascii_uppercase());
+        }
+    }
+
+    #[test]
+    fn stable_object_key_builds_cross_lab_evidence_objects() {
+        let artifact = artifact();
+        let keys = [
+            StableObjectKey::lab_object(
+                ObjectKind::TraceEvent,
+                Some(&artifact),
+                "trace",
+                "session-1/event 004",
+            )
+            .unwrap(),
+            StableObjectKey::lab_object(
+                ObjectKind::CrashFrame,
+                Some(&artifact),
+                "crash",
+                "asan-log/frame#0",
+            )
+            .unwrap(),
+            StableObjectKey::lab_object(
+                ObjectKind::ProtocolField,
+                Some(&artifact),
+                "protocol",
+                "sample-1/message-2/opcode",
+            )
+            .unwrap(),
+            StableObjectKey::lab_object(
+                ObjectKind::PluginContribution,
+                None,
+                "plugin",
+                "com.example.detector/finding-1",
+            )
+            .unwrap(),
+        ];
+
+        for key in keys {
+            assert!(key.as_str().contains("/lab="));
+            assert!(!key.as_str().contains('\\'));
+            assert!(!key.as_str().contains(' '));
         }
     }
 }

@@ -6,6 +6,7 @@ use std::{fmt, str::FromStr};
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactKind {
     Binary,
+    Firmware,
     Unsupported,
 }
 
@@ -13,6 +14,7 @@ impl ArtifactKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Binary => "binary",
+            Self::Firmware => "firmware",
             Self::Unsupported => "unsupported",
         }
     }
@@ -30,6 +32,7 @@ impl FromStr for ArtifactKind {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "binary" => Ok(Self::Binary),
+            "firmware" => Ok(Self::Firmware),
             "unsupported" => Ok(Self::Unsupported),
             other => Err(RevDeckError::InvalidObjectKeyComponent {
                 component: "artifact_kind".to_string(),

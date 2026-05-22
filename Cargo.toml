@@ -8,12 +8,17 @@ members = [
     "crates/revdeck-plugin-sdk",
     "crates/revdeck-tui",
     "tests/commands",
+    "tests/diff",
     "tests/foundation",
     "tests/export",
     "tests/memory",
     "tests/navigation",
     "tests/plugin-sdk",
     "tests/radar",
+    "tests/firmware",
+    "tests/trace",
+    "tests/crash",
+    "tests/protocol",
     "tests/tui",
 ]
 resolver = "2"

@@ -6,6 +6,8 @@ pub struct PermissionSet {
     pub artifact_read: Vec<String>,
     pub project_read: Vec<String>,
     pub project_write: Vec<String>,
+    pub lab_read: Vec<String>,
+    pub lab_write: Vec<String>,
     pub filesystem_read: Vec<String>,
     pub filesystem_write: Vec<String>,
     pub network: bool,
@@ -19,6 +21,8 @@ impl PermissionSet {
         self.artifact_read.is_empty()
             && self.project_read.is_empty()
             && self.project_write.is_empty()
+            && self.lab_read.is_empty()
+            && self.lab_write.is_empty()
             && self.filesystem_read.is_empty()
             && self.filesystem_write.is_empty()
             && !self.network

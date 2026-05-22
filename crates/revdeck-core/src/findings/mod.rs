@@ -1,4 +1,4 @@
-use crate::ObjectRef;
+use crate::{ObjectKind, ObjectRef};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -155,6 +155,24 @@ impl FindingEvidence {
             .filter(|label| !label.is_empty());
         self
     }
+
+    pub fn lab_id(&self) -> Option<&'static str> {
+        lab_id_for_kind(self.evidence.kind)
+    }
+}
+
+pub const fn lab_id_for_kind(kind: ObjectKind) -> Option<&'static str> {
+    match kind {
+        ObjectKind::TraceSession | ObjectKind::TraceEvent => Some("trace"),
+        ObjectKind::FirmwareFile => Some("firmware"),
+        ObjectKind::CrashReport | ObjectKind::CrashFrame => Some("crash"),
+        ObjectKind::ProtocolSample | ObjectKind::ProtocolMessage | ObjectKind::ProtocolField => {
+            Some("protocol")
+        }
+        ObjectKind::DiffDelta => Some("diff"),
+        ObjectKind::PluginContribution => Some("plugin"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -204,15 +222,36 @@ mod tests {
             updated_at: datetime!(2026-05-13 00:00 UTC),
         }
         .normalized();
-        let context = ExportContext {
-            report: Report {
+        let context = ExportContext::new(
+            Report {
                 generated_at: datetime!(2026-05-13 00:01 UTC),
                 findings: vec![finding],
             },
-            evidence_objects: vec![ObjectSummary::new(function, "auth_gate")],
-        };
+            vec![ObjectSummary::new(function, "auth_gate")],
+        );
 
         let validation = pre_export_validation(&context).unwrap();
         assert!(validation.is_valid());
+    }
+
+    #[test]
+    fn finding_evidence_exposes_lab_provenance_from_object_kind() {
+        let artifact = artifact();
+        let trace_event = ObjectRef::lab_object(
+            ObjectKind::TraceEvent,
+            Some(&artifact.key),
+            "trace",
+            "session-1/event-4",
+        )
+        .unwrap();
+        let evidence = FindingEvidence::new(
+            trace_event,
+            "timeline",
+            0,
+            "trace event correlates with this finding",
+            None,
+        );
+
+        assert_eq!(evidence.lab_id(), Some("trace"));
     }
 }

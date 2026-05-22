@@ -366,8 +366,18 @@ pub fn import_binary(
         Some(run.id),
         &artifact_ref,
         profile,
-        "parse",
-        serde_json::json!({ "bytes": bytes.len() }),
+        "binary.parse",
+        job_metadata(
+            serde_json::json!({ "bytes": bytes.len() }),
+            profile,
+            "binary.parse",
+            Vec::new(),
+            vec![format!(
+                "parse job queued for {} bytes with {} profile",
+                bytes.len(),
+                profile.as_str()
+            )],
+        ),
     )?;
 
     match parse_binary(&artifact_ref, &bytes, profile) {
@@ -381,11 +391,22 @@ pub fn import_binary(
                     progress_total: Some(1),
                     objects_produced: 1,
                     diagnostics_count: parsed.diagnostics.len() as u64,
-                    metadata: serde_json::json!({
+                    metadata: job_metadata(
+                        serde_json::json!({
                         "format": parsed.format,
                         "architecture": parsed.architecture,
                         "entrypoint": parsed.entrypoint
-                    }),
+                        }),
+                        profile,
+                        "binary.parse",
+                        diagnostic_snippets(&parsed.diagnostics),
+                        vec![format!(
+                            "parsed {} {} artifact with entrypoint {:?}",
+                            parsed.format.as_str(),
+                            parsed.architecture,
+                            parsed.entrypoint
+                        )],
+                    ),
                 },
             )?;
             let indexed_artifact = artifact_record(ArtifactRecordInput {
@@ -418,7 +439,13 @@ pub fn import_binary(
                     progress_total: Some(1),
                     objects_produced: 0,
                     diagnostics_count: 1,
-                    metadata: serde_json::json!({ "diagnostic": diagnostic }),
+                    metadata: job_metadata(
+                        serde_json::json!({ "diagnostic": diagnostic }),
+                        profile,
+                        "binary.parse",
+                        diagnostic_snippets(std::slice::from_ref(&diagnostic)),
+                        vec!["parse failed before indexed facts were persisted".to_string()],
+                    ),
                 },
             )?;
             persist_failure(
@@ -841,16 +868,25 @@ fn persist_success(
         profile,
         CompletedAnalysisJob {
             run_id: Some(run_id),
-            pass_name: "surface",
+            pass_name: "binary.surface",
             status: "succeeded",
             objects_produced: surface_count as u64,
             diagnostics_count: diagnostic_count as u64,
-            metadata: serde_json::json!({
-                "sections": summary.sections,
-                "symbols": summary.symbols,
-                "imports": summary.imports,
-                "strings": summary.strings
-            }),
+            metadata: job_metadata(
+                serde_json::json!({
+                    "sections": summary.sections,
+                    "symbols": summary.symbols,
+                    "imports": summary.imports,
+                    "strings": summary.strings
+                }),
+                profile,
+                "binary.surface",
+                diagnostic_snippets(&summary.diagnostics),
+                vec![format!(
+                    "persisted sections={} symbols={} imports={} strings={}",
+                    summary.sections, summary.symbols, summary.imports, summary.strings
+                )],
+            ),
         },
     )?;
     record_completed_job(
@@ -859,11 +895,17 @@ fn persist_success(
         profile,
         CompletedAnalysisJob {
             run_id: Some(run_id),
-            pass_name: "seed",
+            pass_name: "binary.seed",
             status: "succeeded",
             objects_produced: function_count as u64,
             diagnostics_count: 0,
-            metadata: serde_json::json!({ "functions": summary.functions }),
+            metadata: job_metadata(
+                serde_json::json!({ "functions": summary.functions }),
+                profile,
+                "binary.seed",
+                Vec::new(),
+                vec![format!("seeded {function_count} function records")],
+            ),
         },
     )?;
     let native_status = if profile.collects_native_cfg() {
@@ -877,11 +919,17 @@ fn persist_success(
         profile,
         CompletedAnalysisJob {
             run_id: Some(run_id),
-            pass_name: "linear",
+            pass_name: "binary.linear",
             status: native_status,
             objects_produced: instruction_count as u64,
             diagnostics_count: 0,
-            metadata: serde_json::json!({ "instructions": instruction_count }),
+            metadata: job_metadata(
+                serde_json::json!({ "instructions": instruction_count }),
+                profile,
+                "binary.linear",
+                native_job_diagnostics(&summary.diagnostics, native_status),
+                native_job_logs(profile, native_status, "linear"),
+            ),
         },
     )?;
     record_completed_job(
@@ -890,14 +938,20 @@ fn persist_success(
         profile,
         CompletedAnalysisJob {
             run_id: Some(run_id),
-            pass_name: "cfg",
+            pass_name: "binary.cfg",
             status: native_status,
             objects_produced: (basic_block_count + cfg_edge_count) as u64,
             diagnostics_count: 0,
-            metadata: serde_json::json!({
-                "basic_blocks": basic_block_count,
-                "cfg_edges": cfg_edge_count
-            }),
+            metadata: job_metadata(
+                serde_json::json!({
+                    "basic_blocks": basic_block_count,
+                    "cfg_edges": cfg_edge_count
+                }),
+                profile,
+                "binary.cfg",
+                native_job_diagnostics(&summary.diagnostics, native_status),
+                native_job_logs(profile, native_status, "cfg"),
+            ),
         },
     )?;
     record_completed_job(
@@ -906,11 +960,17 @@ fn persist_success(
         profile,
         CompletedAnalysisJob {
             run_id: Some(run_id),
-            pass_name: "dataflow",
+            pass_name: "binary.dataflow",
             status: native_status,
             objects_produced: instruction_count as u64,
             diagnostics_count: 0,
-            metadata: serde_json::json!({ "instructions": instruction_count }),
+            metadata: job_metadata(
+                serde_json::json!({ "instructions": instruction_count }),
+                profile,
+                "binary.dataflow",
+                native_job_diagnostics(&summary.diagnostics, native_status),
+                native_job_logs(profile, native_status, "dataflow"),
+            ),
         },
     )?;
 
@@ -930,14 +990,20 @@ fn persist_success(
         profile,
         CompletedAnalysisJob {
             run_id: Some(scoring_run_id),
-            pass_name: "triage",
+            pass_name: "binary.triage",
             status: "succeeded",
             objects_produced: function_count as u64,
             diagnostics_count: 0,
-            metadata: serde_json::json!({
-                "functions": function_count,
-                "input_run_id": run_id
-            }),
+            metadata: job_metadata(
+                serde_json::json!({
+                    "functions": function_count,
+                    "input_run_id": run_id
+                }),
+                profile,
+                "binary.triage",
+                Vec::new(),
+                vec![format!("scored {function_count} functions for triage")],
+            ),
         },
     )?;
     Ok(ImportOutcome {
@@ -4071,6 +4137,89 @@ fn record_completed_job(
     )
 }
 
+fn job_metadata(
+    mut metadata: serde_json::Value,
+    profile: AnalysisProfile,
+    pass_name: &'static str,
+    diagnostic_snippets: Vec<String>,
+    log_snippets: Vec<String>,
+) -> serde_json::Value {
+    let (lab_id, pass_phase) = pass_name
+        .split_once('.')
+        .map(|(lab_id, pass_phase)| (lab_id, pass_phase))
+        .unwrap_or(("unknown", pass_name));
+    let Some(map) = metadata.as_object_mut() else {
+        return serde_json::json!({
+            "value": metadata,
+            "pass_name": pass_name,
+            "lab_id": lab_id,
+            "pass_phase": pass_phase,
+            "parameters": job_parameters(profile),
+            "diagnostic_snippets": diagnostic_snippets,
+            "log_snippets": log_snippets
+        });
+    };
+
+    map.entry("pass_name".to_string())
+        .or_insert_with(|| serde_json::json!(pass_name));
+    map.entry("lab_id".to_string())
+        .or_insert_with(|| serde_json::json!(lab_id));
+    map.entry("pass_phase".to_string())
+        .or_insert_with(|| serde_json::json!(pass_phase));
+    map.entry("parameters".to_string())
+        .or_insert_with(|| job_parameters(profile));
+    if !diagnostic_snippets.is_empty() {
+        map.insert(
+            "diagnostic_snippets".to_string(),
+            serde_json::json!(diagnostic_snippets),
+        );
+    }
+    if !log_snippets.is_empty() {
+        map.insert("log_snippets".to_string(), serde_json::json!(log_snippets));
+    }
+    metadata
+}
+
+fn job_parameters(profile: AnalysisProfile) -> serde_json::Value {
+    serde_json::json!({
+        "profile": profile.as_str(),
+        "native_cfg": profile.collects_native_cfg()
+    })
+}
+
+fn diagnostic_snippets(diagnostics: &[AnalysisDiagnostic]) -> Vec<String> {
+    diagnostics
+        .iter()
+        .take(4)
+        .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+        .collect()
+}
+
+fn native_job_diagnostics(diagnostics: &[AnalysisDiagnostic], status: &str) -> Vec<String> {
+    if status != "skipped" {
+        return Vec::new();
+    }
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "pass_skipped_by_profile")
+        .take(4)
+        .map(|diagnostic| format!("{}: {}", diagnostic.code, diagnostic.message))
+        .collect()
+}
+
+fn native_job_logs(profile: AnalysisProfile, status: &str, pass_name: &str) -> Vec<String> {
+    if status == "skipped" {
+        vec![format!(
+            "{pass_name} skipped because {} profile does not collect native CFG facts",
+            profile.as_str()
+        )]
+    } else {
+        vec![format!(
+            "{pass_name} completed with native CFG collection enabled"
+        )]
+    }
+}
+
 fn profile_skipped_diagnostic(
     profile: AnalysisProfile,
     pass: &'static str,
@@ -4490,13 +4639,13 @@ mod tests {
             .iter()
             .map(|job| (job.pass_name.as_str(), job.status.as_str()))
             .collect::<BTreeMap<_, _>>();
-        assert_eq!(job_statuses.get("parse"), Some(&"succeeded"));
-        assert_eq!(job_statuses.get("surface"), Some(&"succeeded"));
-        assert_eq!(job_statuses.get("seed"), Some(&"succeeded"));
-        assert_eq!(job_statuses.get("linear"), Some(&"skipped"));
-        assert_eq!(job_statuses.get("cfg"), Some(&"skipped"));
-        assert_eq!(job_statuses.get("dataflow"), Some(&"skipped"));
-        assert_eq!(job_statuses.get("triage"), Some(&"succeeded"));
+        assert_eq!(job_statuses.get("binary.parse"), Some(&"succeeded"));
+        assert_eq!(job_statuses.get("binary.surface"), Some(&"succeeded"));
+        assert_eq!(job_statuses.get("binary.seed"), Some(&"succeeded"));
+        assert_eq!(job_statuses.get("binary.linear"), Some(&"skipped"));
+        assert_eq!(job_statuses.get("binary.cfg"), Some(&"skipped"));
+        assert_eq!(job_statuses.get("binary.dataflow"), Some(&"skipped"));
+        assert_eq!(job_statuses.get("binary.triage"), Some(&"succeeded"));
     }
 
     #[test]

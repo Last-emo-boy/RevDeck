@@ -1,0 +1,20 @@
+[plugin]
+id = "com.revdeck.examples.invalid-lab-write"
+name = "Invalid Lab Write Permission Plugin"
+version = "0.1.0"
+sdk_version = "0.1.0"
+revdeck_compat = ">=0.1,<0.3"
+
+[[capabilities]]
+id = "missing-lab-write"
+kind = "report_contributor"
+inputs = ["object_batch"]
+outputs = ["finding_context"]
+
+[permissions]
+artifact_read = ["external_export"]
+project_write = ["objects", "attributes"]
+network = false
+process_spawn = false
+secrets = false
+environment = false

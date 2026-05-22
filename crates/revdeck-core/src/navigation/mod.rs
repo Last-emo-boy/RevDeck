@@ -1,19 +1,202 @@
 use crate::{ObjectKind, ObjectRef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LabMaturity {
+    Active,
+    Preview,
+    Planned,
+}
+
+impl LabMaturity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Preview => "preview",
+            Self::Planned => "planned",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LabId {
+    BinaryTriage,
+    WorkspaceJobs,
+    Graph,
+    Diff,
+    Trace,
+    Firmware,
+    Crash,
+    Protocol,
+    Plugin,
+    Report,
+}
+
+impl LabId {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BinaryTriage => "binary-triage",
+            Self::WorkspaceJobs => "workspace-jobs",
+            Self::Graph => "graph",
+            Self::Diff => "diff",
+            Self::Trace => "trace",
+            Self::Firmware => "firmware",
+            Self::Crash => "crash",
+            Self::Protocol => "protocol",
+            Self::Plugin => "plugin",
+            Self::Report => "report",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LabDescriptor {
+    pub id: LabId,
+    pub label: &'static str,
+    pub badge: &'static str,
+    pub purpose: &'static str,
+    pub default_lens: NavigationLens,
+    pub shortcut: Option<char>,
+    pub maturity: LabMaturity,
+}
+
+impl LabDescriptor {
+    pub const fn stable_id(self) -> &'static str {
+        self.id.as_str()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum NavigationLens {
     Overview,
     TriageBoard,
+    Jobs,
     BinaryMap,
     FunctionRadar,
     Functions,
     Strings,
     Imports,
+    Diff,
+    Trace,
+    Firmware,
+    Crash,
+    Protocol,
     Notes,
     Findings,
     Inspector,
     LocalGraph,
 }
+
+pub const WORKSPACE_LENSES: [NavigationLens; 16] = [
+    NavigationLens::Overview,
+    NavigationLens::TriageBoard,
+    NavigationLens::Jobs,
+    NavigationLens::BinaryMap,
+    NavigationLens::FunctionRadar,
+    NavigationLens::LocalGraph,
+    NavigationLens::Diff,
+    NavigationLens::Trace,
+    NavigationLens::Firmware,
+    NavigationLens::Crash,
+    NavigationLens::Protocol,
+    NavigationLens::Functions,
+    NavigationLens::Strings,
+    NavigationLens::Imports,
+    NavigationLens::Notes,
+    NavigationLens::Findings,
+];
+
+pub const ALL_LABS: [LabDescriptor; 10] = [
+    LabDescriptor {
+        id: LabId::BinaryTriage,
+        label: "Binary Triage Lab",
+        badge: "BIN",
+        purpose: "Import binaries, index objects, score risky functions, and drive evidence-backed triage.",
+        default_lens: NavigationLens::Overview,
+        shortcut: Some('o'),
+        maturity: LabMaturity::Active,
+    },
+    LabDescriptor {
+        id: LabId::WorkspaceJobs,
+        label: "Workspace/Jobs Lab",
+        badge: "JOB",
+        purpose: "Inspect pass history, profile degradation, skipped work, failures, and analysis diagnostics.",
+        default_lens: NavigationLens::Jobs,
+        shortcut: Some('J'),
+        maturity: LabMaturity::Preview,
+    },
+    LabDescriptor {
+        id: LabId::Graph,
+        label: "Graph Lab",
+        badge: "REL",
+        purpose: "Explore local relations, xrefs, calls, containment, and evidence paths around the current object.",
+        default_lens: NavigationLens::LocalGraph,
+        shortcut: Some('G'),
+        maturity: LabMaturity::Active,
+    },
+    LabDescriptor {
+        id: LabId::Diff,
+        label: "Diff Lab",
+        badge: "DIF",
+        purpose: "Compare artifacts or projects across functions, imports, strings, findings, scores, and graph deltas.",
+        default_lens: NavigationLens::Diff,
+        shortcut: Some('D'),
+        maturity: LabMaturity::Preview,
+    },
+    LabDescriptor {
+        id: LabId::Trace,
+        label: "Trace Lab",
+        badge: "TRC",
+        purpose: "Import execution traces, inspect timelines, and correlate events with binary evidence.",
+        default_lens: NavigationLens::Trace,
+        shortcut: Some('T'),
+        maturity: LabMaturity::Preview,
+    },
+    LabDescriptor {
+        id: LabId::Firmware,
+        label: "Firmware Lab",
+        badge: "FMW",
+        purpose: "Inventory firmware file trees, nested artifacts, supported binaries, and path-based evidence.",
+        default_lens: NavigationLens::Firmware,
+        shortcut: Some('W'),
+        maturity: LabMaturity::Preview,
+    },
+    LabDescriptor {
+        id: LabId::Crash,
+        label: "Crash Lab",
+        badge: "CRS",
+        purpose: "Normalize crash reports, cluster stack traces, and link frames to functions and findings.",
+        default_lens: NavigationLens::Crash,
+        shortcut: Some('C'),
+        maturity: LabMaturity::Preview,
+    },
+    LabDescriptor {
+        id: LabId::Protocol,
+        label: "Protocol Lab",
+        badge: "PRO",
+        purpose: "Inspect samples, messages, fields, schema hypotheses, and links back to binary behavior.",
+        default_lens: NavigationLens::Protocol,
+        shortcut: Some('P'),
+        maturity: LabMaturity::Preview,
+    },
+    LabDescriptor {
+        id: LabId::Plugin,
+        label: "Plugin Lab",
+        badge: "PLG",
+        purpose: "Validate, dry-run, audit, and commit plugin contributions through the host boundary.",
+        default_lens: NavigationLens::Overview,
+        shortcut: None,
+        maturity: LabMaturity::Preview,
+    },
+    LabDescriptor {
+        id: LabId::Report,
+        label: "Report Lab",
+        badge: "RPT",
+        purpose: "Validate findings and export cross-lab evidence bundles as JSON or Markdown.",
+        default_lens: NavigationLens::Findings,
+        shortcut: Some('F'),
+        maturity: LabMaturity::Active,
+    },
+];
 
 impl NavigationLens {
     pub fn for_object_kind(kind: ObjectKind) -> Self {
@@ -21,15 +204,125 @@ impl NavigationLens {
             ObjectKind::Artifact | ObjectKind::File | ObjectKind::Binary | ObjectKind::Section => {
                 Self::BinaryMap
             }
+            ObjectKind::FirmwareFile => Self::Firmware,
             ObjectKind::Function | ObjectKind::Symbol | ObjectKind::Score => Self::FunctionRadar,
             ObjectKind::String => Self::Strings,
             ObjectKind::Import => Self::Imports,
+            ObjectKind::DiffDelta => Self::Diff,
+            ObjectKind::TraceSession | ObjectKind::TraceEvent => Self::Trace,
+            ObjectKind::CrashReport | ObjectKind::CrashFrame => Self::Crash,
+            ObjectKind::ProtocolSample
+            | ObjectKind::ProtocolMessage
+            | ObjectKind::ProtocolField => Self::Protocol,
             ObjectKind::Instruction
             | ObjectKind::BasicBlock
             | ObjectKind::Xref
-            | ObjectKind::Edge => Self::LocalGraph,
+            | ObjectKind::Edge
+            | ObjectKind::PluginContribution => Self::LocalGraph,
             ObjectKind::Annotation => Self::Notes,
             ObjectKind::Finding => Self::Findings,
+        }
+    }
+
+    pub const fn badge(self) -> &'static str {
+        match self {
+            Self::Overview => "OVR",
+            Self::TriageBoard => "TRI",
+            Self::Jobs => "JOB",
+            Self::BinaryMap => "BIN",
+            Self::FunctionRadar => "RAD",
+            Self::Functions => "FUN",
+            Self::Strings => "STR",
+            Self::Imports => "IMP",
+            Self::Diff => "DIF",
+            Self::Trace => "TRC",
+            Self::Firmware => "FMW",
+            Self::Crash => "CRS",
+            Self::Protocol => "PRO",
+            Self::Notes => "MEM",
+            Self::Findings => "FND",
+            Self::Inspector => "INS",
+            Self::LocalGraph => "REL",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Overview => "Overview",
+            Self::TriageBoard => "Triage Board",
+            Self::Jobs => "Analysis Jobs",
+            Self::BinaryMap => "Binary Map",
+            Self::FunctionRadar => "Function Radar",
+            Self::Functions => "Functions",
+            Self::Strings => "Strings",
+            Self::Imports => "Imports",
+            Self::Diff => "Diff Lab",
+            Self::Trace => "Trace Lab",
+            Self::Firmware => "Firmware Lab",
+            Self::Crash => "Crash Lab",
+            Self::Protocol => "Protocol Lab",
+            Self::Notes => "Notes",
+            Self::Findings => "Findings",
+            Self::Inspector => "Inspector",
+            Self::LocalGraph => "Local Relations",
+        }
+    }
+
+    pub const fn help(self) -> &'static str {
+        match self {
+            Self::Overview => "project counts; o overview, g triage",
+            Self::TriageBoard => "ranked next actions; Enter opens target",
+            Self::Jobs => "read-only pass history; J jobs",
+            Self::BinaryMap => "binary structure and import status",
+            Self::FunctionRadar => "prioritized functions; Enter opens current row",
+            Self::Functions => "all discovered functions; Enter inspect",
+            Self::Strings => "strings and addresses; :find string ...",
+            Self::Imports => "imported APIs; :find import system",
+            Self::Diff => "artifact deltas; Enter opens delta, G graphs evidence",
+            Self::Trace => "timeline events; Enter opens event, G graphs correlation",
+            Self::Firmware => "file inventory; Enter opens file, G graphs path evidence",
+            Self::Crash => "crash clusters; Enter opens report/frame, G graphs correlation",
+            Self::Protocol => "messages and fields; Enter opens field, G graphs evidence",
+            Self::Notes => "persisted and session analysis memory",
+            Self::Findings => "reportable findings and drafts",
+            Self::Inspector => "selected object context; Enter evidence",
+            Self::LocalGraph => "xrefs and evidence paths; G opens current graph",
+        }
+    }
+
+    pub const fn next_step(self) -> &'static str {
+        match self {
+            Self::Overview => "Confirm status, then press g for triage or r for Function Radar.",
+            Self::TriageBoard => {
+                "Work top-down; use suggested commands and turn strong leads into findings."
+            }
+            Self::Jobs => "Review recent pass status for the active artifact before triage.",
+            Self::BinaryMap => {
+                "Check whether parsing degraded; inspect sections, strings, and imports next."
+            }
+            Self::FunctionRadar => "Open high-score functions, then inspect evidence and xrefs.",
+            Self::Functions => "Browse indexed functions; tag, rename, or mark reviewed as you go.",
+            Self::Strings => "Search suspicious strings, open one, then inspect references.",
+            Self::Imports => "Open dangerous imports and use :xrefs current to find callers.",
+            Self::Diff => {
+                "Inspect changed rows, then use Graph Lab to pivot into before/after evidence."
+            }
+            Self::Trace => {
+                "Follow timeline events, then pivot correlated calls into Function Radar."
+            }
+            Self::Firmware => {
+                "Review file types, open suspicious paths, then graph nested evidence."
+            }
+            Self::Crash => {
+                "Review top frames, cluster repeats, then link crash evidence to findings."
+            }
+            Self::Protocol => {
+                "Inspect field slices, schema hypotheses, and linked binary evidence."
+            }
+            Self::Notes => "Review session memory before continuing or reporting.",
+            Self::Findings => "Check drafts, link evidence, and queue report exports.",
+            Self::Inspector => "Jump from evidence or relations into the linked object.",
+            Self::LocalGraph => "Use relation context to move from source to sink evidence.",
         }
     }
 }
@@ -225,6 +518,99 @@ mod tests {
         assert_eq!(
             current.broken.as_ref().unwrap().reason,
             "object was removed by re-index"
+        );
+    }
+
+    #[test]
+    fn lab_registry_order_and_ids_are_stable() {
+        let ids = ALL_LABS
+            .iter()
+            .map(|lab| lab.stable_id())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ids,
+            vec![
+                "binary-triage",
+                "workspace-jobs",
+                "graph",
+                "diff",
+                "trace",
+                "firmware",
+                "crash",
+                "protocol",
+                "plugin",
+                "report"
+            ]
+        );
+        assert_eq!(ALL_LABS[0].default_lens, NavigationLens::Overview);
+        assert_eq!(ALL_LABS[1].shortcut, Some('J'));
+        assert_eq!(ALL_LABS[2].label, "Graph Lab");
+        assert_eq!(ALL_LABS[7].default_lens, NavigationLens::Protocol);
+        assert_eq!(ALL_LABS[7].shortcut, Some('P'));
+    }
+
+    #[test]
+    fn workspace_lenses_keep_jobs_and_graph_discoverable() {
+        assert!(WORKSPACE_LENSES.contains(&NavigationLens::Jobs));
+        assert!(WORKSPACE_LENSES.contains(&NavigationLens::LocalGraph));
+        assert!(WORKSPACE_LENSES.contains(&NavigationLens::Diff));
+        assert!(WORKSPACE_LENSES.contains(&NavigationLens::Trace));
+        assert!(WORKSPACE_LENSES.contains(&NavigationLens::Firmware));
+        assert!(WORKSPACE_LENSES.contains(&NavigationLens::Crash));
+        assert!(WORKSPACE_LENSES.contains(&NavigationLens::Protocol));
+        assert_eq!(NavigationLens::Jobs.label(), "Analysis Jobs");
+        assert_eq!(NavigationLens::LocalGraph.badge(), "REL");
+        assert_eq!(NavigationLens::Diff.label(), "Diff Lab");
+        assert_eq!(NavigationLens::Trace.badge(), "TRC");
+        assert_eq!(NavigationLens::Firmware.label(), "Firmware Lab");
+        assert_eq!(NavigationLens::Crash.label(), "Crash Lab");
+        assert_eq!(NavigationLens::Protocol.badge(), "PRO");
+    }
+
+    #[test]
+    fn lab_evidence_objects_route_to_shared_lenses() {
+        assert_eq!(
+            NavigationLens::for_object_kind(ObjectKind::FirmwareFile),
+            NavigationLens::Firmware
+        );
+        for kind in [ObjectKind::PluginContribution] {
+            assert_eq!(
+                NavigationLens::for_object_kind(kind),
+                NavigationLens::LocalGraph
+            );
+        }
+        assert_eq!(
+            NavigationLens::for_object_kind(ObjectKind::ProtocolSample),
+            NavigationLens::Protocol
+        );
+        assert_eq!(
+            NavigationLens::for_object_kind(ObjectKind::ProtocolMessage),
+            NavigationLens::Protocol
+        );
+        assert_eq!(
+            NavigationLens::for_object_kind(ObjectKind::ProtocolField),
+            NavigationLens::Protocol
+        );
+        assert_eq!(
+            NavigationLens::for_object_kind(ObjectKind::CrashReport),
+            NavigationLens::Crash
+        );
+        assert_eq!(
+            NavigationLens::for_object_kind(ObjectKind::CrashFrame),
+            NavigationLens::Crash
+        );
+        assert_eq!(
+            NavigationLens::for_object_kind(ObjectKind::DiffDelta),
+            NavigationLens::Diff
+        );
+        assert_eq!(
+            NavigationLens::for_object_kind(ObjectKind::TraceSession),
+            NavigationLens::Trace
+        );
+        assert_eq!(
+            NavigationLens::for_object_kind(ObjectKind::TraceEvent),
+            NavigationLens::Trace
         );
     }
 }

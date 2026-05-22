@@ -1,10 +1,11 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{backend::TestBackend, Terminal};
 use revdeck_core::{
-    EdgeKind, InMemoryObjectGraph, NavigationLens, ObjectKind, ObjectRef, ObjectRelation,
-    ObjectSummary, StableObjectKey, StableObjectKeyBuilder,
+    AnalysisJobRow, AnalysisJobsSummary, EdgeKind, InMemoryObjectGraph, NavigationLens, ObjectKind,
+    ObjectRef, ObjectRelation, ObjectSummary, StableObjectKey, StableObjectKeyBuilder,
 };
 use revdeck_db::{FindingRepository, MemoryRepository, ProjectDatabase};
+use revdeck_index::AnalysisProfile;
 use revdeck_tui::{render_workspace, PaneFocus, TuiAction, TuiShellState, WorkspaceSnapshot};
 use time::macros::datetime;
 
@@ -52,6 +53,50 @@ fn graph(snapshot: &WorkspaceSnapshot) -> InMemoryObjectGraph {
         }
     }
     graph
+}
+
+fn test_job(pass_name: &str, status: &str, progress: &str) -> AnalysisJobRow {
+    let diagnostic_snippets = if status == "failed" {
+        vec!["index_model_error: failed to persist cfg".to_string()]
+    } else if status == "skipped" {
+        vec!["pass_skipped_by_profile: quick skipped native CFG".to_string()]
+    } else {
+        Vec::new()
+    };
+    let log_snippets = if status == "running" {
+        vec!["job was still running at snapshot load".to_string()]
+    } else {
+        vec![format!("{pass_name} {status}")]
+    };
+    AnalysisJobRow {
+        id: 1,
+        analysis_run_id: Some(1),
+        artifact_key: Some("artifact:test".to_string()),
+        pass_name: pass_name.to_string(),
+        profile: "quick".to_string(),
+        status: status.to_string(),
+        progress: progress.to_string(),
+        objects_produced: 1,
+        diagnostics_count: 0,
+        started_at: "2026-05-13T00:00:00Z".to_string(),
+        finished_at: Some("2026-05-13T00:00:01Z".to_string()),
+        updated_at: "2026-05-13T00:00:01Z".to_string(),
+        metadata_summary: "profile=quick".to_string(),
+        parameter_items: vec![revdeck_core::AnalysisJobDetailItem {
+            key: "profile".to_string(),
+            value: "quick".to_string(),
+        }],
+        diagnostic_snippets,
+        log_snippets,
+        ..AnalysisJobRow::default()
+    }
+}
+
+fn snapshot_with_jobs(jobs: Vec<AnalysisJobRow>) -> WorkspaceSnapshot {
+    let mut snapshot = WorkspaceSnapshot::empty();
+    snapshot.analysis_jobs = jobs;
+    snapshot.analysis_jobs_summary = AnalysisJobsSummary::from_rows(&snapshot.analysis_jobs);
+    snapshot
 }
 
 fn condition_source_snapshot() -> WorkspaceSnapshot {
@@ -410,8 +455,234 @@ fn render_help_overlay() {
 
     assert!(text.contains("Command Deck"));
     assert!(text.contains("Navigation"));
+    assert!(text.contains("D diff"));
     assert!(text.contains(":find string password"));
     assert!(text.contains("Current next step"));
+}
+
+#[test]
+fn diff_lab_renders_demo_deltas_and_inspector_links() {
+    let snapshot = WorkspaceSnapshot::demo();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Diff), &snapshot)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Diff);
+    assert_eq!(
+        app.selected.as_ref().map(|object_ref| object_ref.kind),
+        Some(ObjectKind::DiffDelta)
+    );
+
+    let backend = TestBackend::new(180, 38);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("Diff Lab"));
+    assert!(text.contains("changed"));
+    assert!(text.contains("object"));
+    assert!(text.contains("main before"));
+    assert!(text.contains("main after"));
+    assert!(text.contains("Diff Delta"));
+    assert!(text.contains("Before: main"));
+    assert!(text.contains("After: main"));
+    assert!(text.contains("Command Previews"));
+    assert!(text.contains(":finding link <finding>"));
+}
+
+#[test]
+fn trace_lab_renders_demo_timeline_and_inspector_links() {
+    let snapshot = WorkspaceSnapshot::demo();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Trace), &snapshot)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Trace);
+    assert_eq!(
+        app.selected.as_ref().map(|object_ref| object_ref.kind),
+        Some(ObjectKind::TraceSession)
+    );
+
+    let backend = TestBackend::new(180, 38);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("Trace Lab"));
+    assert!(text.contains("demo-auth"));
+    assert!(text.contains("2 events"));
+    assert!(text.contains("Trace Session"));
+    assert!(text.contains("Session: demo-auth"));
+    assert!(text.contains("Threads: 1"));
+
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert_eq!(
+        app.selected.as_ref().map(|object_ref| object_ref.kind),
+        Some(ObjectKind::TraceEvent)
+    );
+    assert!(text.contains("Trace Event"));
+    assert!(text.contains("Thread: main"));
+    assert!(text.contains("Kind: call"));
+    assert!(text.contains("main call auth gate"));
+    assert!(text.contains("auth gate reached"));
+    assert!(text.contains("Correlated: main"));
+    assert!(text.contains(":finding link <finding>"));
+}
+
+#[test]
+fn firmware_lab_renders_demo_inventory_and_inspector_links() {
+    let snapshot = WorkspaceSnapshot::demo();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Firmware), &snapshot)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Firmware);
+    assert_eq!(
+        app.selected.as_ref().map(|object_ref| object_ref.kind),
+        Some(ObjectKind::FirmwareFile)
+    );
+
+    let backend = TestBackend::new(180, 38);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("Firmware Lab"));
+    assert!(text.contains("etc/passwd"));
+    assert!(text.contains("text"));
+    assert!(text.contains("Firmware File"));
+    assert!(text.contains("Path: etc/passwd"));
+    assert!(text.contains("Source:"));
+    assert!(text.contains(":finding link <finding>"));
+
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("bin/httpd.elf"));
+    assert!(text.contains("elf"));
+    assert!(text.contains("Executable: true"));
+    assert!(text.contains("Nested artifact: bin/httpd.elf"));
+}
+
+#[test]
+fn crash_lab_renders_demo_reports_frames_and_inspector_links() {
+    let snapshot = WorkspaceSnapshot::demo();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Crash), &snapshot)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Crash);
+    assert_eq!(
+        app.selected.as_ref().map(|object_ref| object_ref.kind),
+        Some(ObjectKind::CrashReport)
+    );
+
+    let backend = TestBackend::new(180, 38);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("Crash Lab"));
+    assert!(text.contains("heap-use-after-free"));
+    assert!(text.contains("SIGABRT"));
+    assert!(text.contains("Crash Report"));
+    assert!(text.contains("Crash ID: asan-uaf-001"));
+    assert!(text.contains("Signature:"));
+
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert_eq!(
+        app.selected.as_ref().map(|object_ref| object_ref.kind),
+        Some(ObjectKind::CrashFrame)
+    );
+    assert!(text.contains("Crash Frame"));
+    assert!(text.contains("Function: main"));
+    assert!(text.contains("Address: 0x401000"));
+    assert!(text.contains("Correlated: main"));
+    assert!(text.contains(":finding link <finding>"));
+}
+
+#[test]
+fn protocol_lab_renders_demo_messages_fields_and_inspector_links() {
+    let snapshot = WorkspaceSnapshot::demo();
+    let graph = graph(&snapshot);
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.handle_key_event(
+        KeyEvent::new(KeyCode::Char('P'), KeyModifiers::NONE),
+        &snapshot,
+        &graph,
+    )
+    .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Protocol);
+    assert_eq!(
+        app.selected.as_ref().map(|object_ref| object_ref.kind),
+        Some(ObjectKind::ProtocolSample)
+    );
+
+    let backend = TestBackend::new(180, 52);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("Protocol Lab"));
+    assert!(text.contains("demo-login"));
+    assert!(text.contains("Protocol Sample"));
+    assert!(text.contains("Schema hypothesis"));
+
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert_eq!(
+        app.selected.as_ref().map(|object_ref| object_ref.kind),
+        Some(ObjectKind::ProtocolMessage)
+    );
+    assert!(text.contains("Protocol Message"));
+    assert!(text.contains("client-hello"));
+    assert!(text.contains("Payload hex"));
+
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert_eq!(
+        app.selected.as_ref().map(|object_ref| object_ref.kind),
+        Some(ObjectKind::ProtocolField)
+    );
+    assert!(text.contains("Protocol Field"));
+    assert!(text.contains("Name: credential"));
+    assert!(text.contains("String hint: admin password"));
+    assert!(text.contains("Correlated: admin password"));
+    assert!(text.contains(":finding link <finding>"));
 }
 
 #[test]
@@ -443,8 +714,44 @@ fn graph_lab_shortcut_preserves_selection_and_renders_relations() {
         .unwrap();
     let text = buffer_text(&terminal);
 
+    assert!(text.contains("Graph Lab"));
+    assert!(text.contains("relation filter"));
+    assert!(text.contains("Path Rows"));
+    assert!(text.contains("Selected Edge"));
     assert!(text.contains("Local Relations"));
     assert!(text.contains("CALLS_IMPORT"));
+}
+
+#[test]
+fn graph_lab_cursor_selects_edge_detail_for_inspector() {
+    let snapshot = WorkspaceSnapshot::demo();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(
+        TuiAction::SwitchLens(NavigationLens::FunctionRadar),
+        &snapshot,
+    )
+    .unwrap();
+    let root = app.selected.clone().unwrap();
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::LocalGraph), &snapshot)
+        .unwrap();
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+
+    assert_eq!(app.selected.as_ref(), Some(&root));
+
+    let backend = TestBackend::new(120, 34);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("Selected Edge"));
+    assert!(text.contains("Source: main"));
+    assert!(text.contains("Target: system"));
+    assert!(text.contains("Confidence: 1.00"));
+    assert!(text.contains("Finding link preview"));
+    assert!(text.contains(":finding link <finding>"));
 }
 
 #[test]
@@ -683,8 +990,137 @@ fn render_small_terminal_fallback() {
         .unwrap();
     let text = buffer_text(&terminal);
 
+    assert!(text.contains("Cockpit"));
     assert!(text.contains("Command / Status"));
     assert!(text.contains("Workspace"));
+}
+
+#[test]
+fn jobs_lens_renders_demo_history_as_read_only() {
+    let snapshot = WorkspaceSnapshot::demo();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Jobs), &snapshot)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Jobs);
+    assert!(app.selected.is_none());
+    for _ in 0..4 {
+        app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    }
+    assert!(app.selected.is_none());
+    assert_eq!(app.main_cursor, 4);
+    app.apply_action(TuiAction::ActivateSelection, &snapshot)
+        .unwrap();
+    assert_eq!(app.active_lens, NavigationLens::Jobs);
+    assert!(app.selected.is_none());
+    assert_eq!(app.focus, PaneFocus::Inspector);
+
+    let backend = TestBackend::new(180, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("Analysis Jobs"));
+    assert!(text.contains("triage"));
+    assert!(text.contains("succeeded"));
+    assert!(text.contains("cfg"));
+    assert!(text.contains("skipped"));
+    assert!(text.contains("0/?"));
+    assert!(text.contains("objects"));
+    assert!(text.contains("diag"));
+    assert!(text.contains("Job Inspector"));
+    assert!(text.contains("parse"));
+    assert!(text.contains("Parameters"));
+    assert!(text.contains("profile"));
+}
+
+#[test]
+fn jobs_lens_empty_state_is_stable() {
+    let snapshot = WorkspaceSnapshot::empty();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Jobs), &snapshot)
+        .unwrap();
+    let backend = TestBackend::new(90, 18);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("No analysis jobs recorded"));
+    assert!(text.contains("read-only lens"));
+    assert!(text.contains("jobs=0"));
+}
+
+#[test]
+fn jobs_lens_selected_inspector_distinguishes_failed_skipped_and_running() {
+    let snapshot = snapshot_with_jobs(vec![
+        test_job("binary.triage", "failed", "1/1"),
+        test_job("binary.cfg", "skipped", "0/?"),
+        test_job("binary.parse", "running", "0/?"),
+    ]);
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Jobs), &snapshot)
+        .unwrap();
+    let backend = TestBackend::new(180, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let failed_text = buffer_text(&terminal);
+    assert!(failed_text.contains("Job Inspector"));
+    assert!(failed_text.contains("triage"));
+    assert!(failed_text.contains("index_model_error"));
+    assert!(failed_text.contains("State: failed"));
+
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let skipped_text = buffer_text(&terminal);
+    assert!(skipped_text.contains("cfg"));
+    assert!(skipped_text.contains("pass_skipped_by_profile"));
+    assert!(skipped_text.contains("State: skipped"));
+
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let running_text = buffer_text(&terminal);
+    assert!(running_text.contains("parse"));
+    assert!(running_text.contains("snapshot load"));
+    assert!(running_text.contains("live refresh"));
+}
+
+#[test]
+fn cockpit_jobs_summary_counts_skipped_as_neutral() {
+    let snapshot = snapshot_with_jobs(vec![
+        test_job("binary.parse", "running", "0/?"),
+        test_job("binary.cfg", "skipped", "0/?"),
+        test_job("binary.triage", "failed", "1/1"),
+    ]);
+    assert_eq!(snapshot.analysis_jobs_summary.running, 1);
+    assert_eq!(snapshot.analysis_jobs_summary.skipped, 1);
+    assert_eq!(snapshot.analysis_jobs_summary.failed, 1);
+
+    let app = TuiShellState::from_snapshot(&snapshot);
+    let backend = TestBackend::new(150, 18);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("jobs=3"));
+    assert!(text.contains("running=1"));
+    assert!(text.contains("failed=1"));
+    assert!(text.contains("skipped=1"));
+    assert!(text.contains("latest=binary.parse:running"));
 }
 
 #[test]
@@ -819,6 +1255,80 @@ fn project_snapshot_loads_native_cfg_objects_for_graph_lab() {
             .iter()
             .any(|relation| relation.target.kind == ObjectKind::Instruction)
     }));
+}
+
+#[test]
+fn project_snapshot_loads_artifact_scoped_analysis_jobs() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("fixtures")
+        .join("binaries")
+        .join("minimal_elf");
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::import_binary(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+
+    let snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+
+    assert!(snapshot
+        .analysis_jobs
+        .iter()
+        .any(|job| job.pass_name == "binary.parse" && job.status == "succeeded"));
+    assert!(snapshot
+        .analysis_jobs
+        .iter()
+        .any(|job| job.pass_name == "binary.triage" && job.status == "succeeded"));
+    assert!(snapshot
+        .analysis_jobs
+        .iter()
+        .any(|job| job.pass_name == "binary.linear" && job.status == "skipped"));
+    assert!(snapshot
+        .analysis_jobs
+        .iter()
+        .any(|job| job.pass_name == "binary.cfg" && job.status == "skipped"));
+    assert!(snapshot
+        .analysis_jobs
+        .iter()
+        .any(|job| job.pass_name == "binary.dataflow" && job.status == "skipped"));
+    assert_eq!(snapshot.analysis_jobs_summary.failed, 0);
+    assert_eq!(snapshot.analysis_jobs_summary.skipped, 3);
+    let skipped = snapshot
+        .analysis_jobs
+        .iter()
+        .find(|job| job.pass_name == "binary.cfg")
+        .unwrap();
+    assert!(skipped
+        .parameter_items
+        .iter()
+        .any(|item| item.key == "profile" && item.value == "quick"));
+    assert!(skipped
+        .log_snippets
+        .iter()
+        .any(|snippet| snippet.contains("skipped")));
+
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Jobs), &snapshot)
+        .unwrap();
+    let backend = TestBackend::new(150, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("Analysis Jobs"));
+    assert!(text.contains("triage"));
+    assert!(text.contains("skipped"));
+    assert!(text.contains("quick"));
 }
 
 #[test]

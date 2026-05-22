@@ -11,9 +11,16 @@ kind = "adapter"
 inputs = ["json"]
 outputs = ["object_batch"]
 
+[[capabilities]]
+id = "minimal-report-contributor"
+kind = "report_contributor"
+inputs = ["object_batch"]
+outputs = ["finding_context"]
+
 [permissions]
 artifact_read = ["external_export"]
 project_write = ["objects", "edges", "attributes", "diagnostics"]
+lab_write = ["plugin"]
 network = false
 process_spawn = false
 secrets = false
