@@ -157,6 +157,94 @@ pub struct AnalysisJobsSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HexByteRow {
+    pub offset: u64,
+    pub hex: String,
+    pub ascii: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HexViewModel {
+    pub artifact: Option<ObjectRef>,
+    pub source_path: Option<String>,
+    pub file_size: Option<u64>,
+    pub base_offset: u64,
+    pub selected_offset: u64,
+    pub bytes_per_row: usize,
+    pub rows: Vec<HexByteRow>,
+    pub status: String,
+}
+
+impl HexViewModel {
+    pub fn empty(status: impl Into<String>) -> Self {
+        Self {
+            artifact: None,
+            source_path: None,
+            file_size: None,
+            base_offset: 0,
+            selected_offset: 0,
+            bytes_per_row: 16,
+            rows: Vec::new(),
+            status: status.into(),
+        }
+    }
+
+    pub fn from_bytes(
+        artifact: ObjectRef,
+        source_path: impl Into<String>,
+        file_size: u64,
+        base_offset: u64,
+        bytes: &[u8],
+    ) -> Self {
+        let bytes_per_row = 16;
+        let rows = bytes
+            .chunks(bytes_per_row)
+            .enumerate()
+            .map(|(index, chunk)| {
+                let offset = base_offset + (index * bytes_per_row) as u64;
+                HexByteRow {
+                    offset,
+                    hex: format_hex_bytes(chunk, bytes_per_row),
+                    ascii: format_ascii_bytes(chunk),
+                }
+            })
+            .collect::<Vec<_>>();
+        Self {
+            artifact: Some(artifact),
+            source_path: Some(source_path.into()),
+            file_size: Some(file_size),
+            base_offset,
+            selected_offset: base_offset,
+            bytes_per_row,
+            rows,
+            status: "ready".to_string(),
+        }
+    }
+}
+
+fn format_hex_bytes(bytes: &[u8], width: usize) -> String {
+    let mut rendered = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>();
+    rendered.resize(width, "  ".to_string());
+    rendered.join(" ")
+}
+
+fn format_ascii_bytes(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_graphic() || *byte == b' ' {
+                *byte as char
+            } else {
+                '.'
+            }
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabSummary {
     pub id: &'static str,
     pub label: &'static str,

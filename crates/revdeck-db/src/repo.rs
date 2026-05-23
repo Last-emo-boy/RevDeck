@@ -612,6 +612,41 @@ impl<'conn> ArtifactRepository<'conn> {
             )
             .optional()
     }
+
+    pub fn list_artifacts(&self, limit: usize) -> rusqlite::Result<Vec<ArtifactRecord>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT object_key, display_name, source_path, stored_path, sha256, size, kind,
+                format, architecture, import_status, created_at
+            FROM artifacts
+            ORDER BY created_at DESC, object_key
+            LIMIT ?1",
+        )?;
+        let records = statement
+            .query_map([limit], |row| {
+                let key: String = row.get(0)?;
+                let kind: String = row.get(6)?;
+                let created_at: String = row.get(10)?;
+                Ok(ArtifactRecord {
+                    object_ref: ObjectRef::new(
+                        ObjectKind::Artifact,
+                        key.parse().map_err(from_core_error)?,
+                    ),
+                    display_name: row.get(1)?,
+                    source_path: row.get(2)?,
+                    stored_path: row.get(3)?,
+                    sha256: row.get(4)?,
+                    size: from_i64(row.get(5)?),
+                    kind,
+                    format: row.get(7)?,
+                    architecture: row.get(8)?,
+                    import_status: row.get(9)?,
+                    created_at: parse_time(&created_at)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(records)
+    }
 }
 
 impl<'conn> ObjectRepository<'conn> {

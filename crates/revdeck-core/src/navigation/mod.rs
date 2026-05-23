@@ -21,6 +21,7 @@ impl LabMaturity {
 pub enum LabId {
     BinaryTriage,
     WorkspaceJobs,
+    HexViewer,
     Graph,
     Diff,
     Trace,
@@ -36,6 +37,7 @@ impl LabId {
         match self {
             Self::BinaryTriage => "binary-triage",
             Self::WorkspaceJobs => "workspace-jobs",
+            Self::HexViewer => "hex-viewer",
             Self::Graph => "graph",
             Self::Diff => "diff",
             Self::Trace => "trace",
@@ -70,6 +72,7 @@ pub enum NavigationLens {
     Overview,
     TriageBoard,
     Jobs,
+    Hex,
     BinaryMap,
     FunctionRadar,
     Functions,
@@ -86,10 +89,11 @@ pub enum NavigationLens {
     LocalGraph,
 }
 
-pub const WORKSPACE_LENSES: [NavigationLens; 16] = [
+pub const WORKSPACE_LENSES: [NavigationLens; 17] = [
     NavigationLens::Overview,
     NavigationLens::TriageBoard,
     NavigationLens::Jobs,
+    NavigationLens::Hex,
     NavigationLens::BinaryMap,
     NavigationLens::FunctionRadar,
     NavigationLens::LocalGraph,
@@ -105,7 +109,7 @@ pub const WORKSPACE_LENSES: [NavigationLens; 16] = [
     NavigationLens::Findings,
 ];
 
-pub const ALL_LABS: [LabDescriptor; 10] = [
+pub const ALL_LABS: [LabDescriptor; 11] = [
     LabDescriptor {
         id: LabId::BinaryTriage,
         label: "Binary Triage Lab",
@@ -122,6 +126,15 @@ pub const ALL_LABS: [LabDescriptor; 10] = [
         purpose: "Inspect pass history, profile degradation, skipped work, failures, and analysis diagnostics.",
         default_lens: NavigationLens::Jobs,
         shortcut: Some('J'),
+        maturity: LabMaturity::Preview,
+    },
+    LabDescriptor {
+        id: LabId::HexViewer,
+        label: "Hex Viewer Lab",
+        badge: "HEX",
+        purpose: "Inspect raw artifact bytes in bounded read-only windows before full analysis finishes.",
+        default_lens: NavigationLens::Hex,
+        shortcut: Some('x'),
         maturity: LabMaturity::Preview,
     },
     LabDescriptor {
@@ -229,6 +242,7 @@ impl NavigationLens {
             Self::Overview => "OVR",
             Self::TriageBoard => "TRI",
             Self::Jobs => "JOB",
+            Self::Hex => "HEX",
             Self::BinaryMap => "BIN",
             Self::FunctionRadar => "RAD",
             Self::Functions => "FUN",
@@ -251,6 +265,7 @@ impl NavigationLens {
             Self::Overview => "Overview",
             Self::TriageBoard => "Triage Board",
             Self::Jobs => "Analysis Jobs",
+            Self::Hex => "Hex Viewer",
             Self::BinaryMap => "Binary Map",
             Self::FunctionRadar => "Function Radar",
             Self::Functions => "Functions",
@@ -273,6 +288,7 @@ impl NavigationLens {
             Self::Overview => "project counts; o overview, g triage",
             Self::TriageBoard => "ranked next actions; Enter opens target",
             Self::Jobs => "read-only pass history; J jobs",
+            Self::Hex => "read-only bytes; x hex, j/k scroll",
             Self::BinaryMap => "binary structure and import status",
             Self::FunctionRadar => "prioritized functions; Enter opens current row",
             Self::Functions => "all discovered functions; Enter inspect",
@@ -297,6 +313,9 @@ impl NavigationLens {
                 "Work top-down; use suggested commands and turn strong leads into findings."
             }
             Self::Jobs => "Review recent pass status for the active artifact before triage.",
+            Self::Hex => {
+                "Inspect raw bytes, then pivot to strings/imports once indexing catches up."
+            }
             Self::BinaryMap => {
                 "Check whether parsing degraded; inspect sections, strings, and imports next."
             }
@@ -533,6 +552,7 @@ mod tests {
             vec![
                 "binary-triage",
                 "workspace-jobs",
+                "hex-viewer",
                 "graph",
                 "diff",
                 "trace",
@@ -545,14 +565,16 @@ mod tests {
         );
         assert_eq!(ALL_LABS[0].default_lens, NavigationLens::Overview);
         assert_eq!(ALL_LABS[1].shortcut, Some('J'));
-        assert_eq!(ALL_LABS[2].label, "Graph Lab");
-        assert_eq!(ALL_LABS[7].default_lens, NavigationLens::Protocol);
-        assert_eq!(ALL_LABS[7].shortcut, Some('P'));
+        assert_eq!(ALL_LABS[2].label, "Hex Viewer Lab");
+        assert_eq!(ALL_LABS[3].label, "Graph Lab");
+        assert_eq!(ALL_LABS[8].default_lens, NavigationLens::Protocol);
+        assert_eq!(ALL_LABS[8].shortcut, Some('P'));
     }
 
     #[test]
     fn workspace_lenses_keep_jobs_and_graph_discoverable() {
         assert!(WORKSPACE_LENSES.contains(&NavigationLens::Jobs));
+        assert!(WORKSPACE_LENSES.contains(&NavigationLens::Hex));
         assert!(WORKSPACE_LENSES.contains(&NavigationLens::LocalGraph));
         assert!(WORKSPACE_LENSES.contains(&NavigationLens::Diff));
         assert!(WORKSPACE_LENSES.contains(&NavigationLens::Trace));
@@ -560,6 +582,7 @@ mod tests {
         assert!(WORKSPACE_LENSES.contains(&NavigationLens::Crash));
         assert!(WORKSPACE_LENSES.contains(&NavigationLens::Protocol));
         assert_eq!(NavigationLens::Jobs.label(), "Analysis Jobs");
+        assert_eq!(NavigationLens::Hex.badge(), "HEX");
         assert_eq!(NavigationLens::LocalGraph.badge(), "REL");
         assert_eq!(NavigationLens::Diff.label(), "Diff Lab");
         assert_eq!(NavigationLens::Trace.badge(), "TRC");

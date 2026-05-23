@@ -52,6 +52,6 @@ pub use view_models::{
     DiffArtifactSnapshot, DiffChangeKind, DiffComparableObject, DiffComparableRelation,
     DiffEntityKind, DiffRow, DiffSummaryViewModel, EvidenceNavigationItem, FunctionRadarRow,
     FunctionRadarViewModel, GraphEdgeDetail, GraphLabViewModel, GraphPathRow,
-    GraphRelationFilterRow, InspectorViewModel, LabSummary, LatestAnalysisJob, OverviewViewModel,
-    ScoreReasonView, TriageActionRow, TriageBoardViewModel,
+    GraphRelationFilterRow, HexByteRow, HexViewModel, InspectorViewModel, LabSummary,
+    LatestAnalysisJob, OverviewViewModel, ScoreReasonView, TriageActionRow, TriageBoardViewModel,
 };

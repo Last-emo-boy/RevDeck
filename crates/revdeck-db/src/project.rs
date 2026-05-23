@@ -24,7 +24,7 @@ impl ProjectDatabase {
             .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
         let db_path = revdeck_dir.join(DATABASE_FILE_NAME);
         let mut connection = Connection::open(&db_path)?;
-        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        configure_connection(&connection)?;
         migrations::migrate(&mut connection)?;
         let info = ProjectInfo { root_dir, db_path };
         Ok(Self { info, connection })
@@ -34,7 +34,7 @@ impl ProjectDatabase {
         let root_dir = project_dir.as_ref().to_path_buf();
         let db_path = root_dir.join(PROJECT_DIR_NAME).join(DATABASE_FILE_NAME);
         let mut connection = Connection::open(&db_path)?;
-        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        configure_connection(&connection)?;
         migrations::migrate(&mut connection)?;
         let info = ProjectInfo { root_dir, db_path };
         Ok(Self { info, connection })
@@ -51,6 +51,15 @@ impl ProjectDatabase {
     pub fn connection_mut(&mut self) -> &mut Connection {
         &mut self.connection
     }
+}
+
+fn configure_connection(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "PRAGMA foreign_keys = ON;
+         PRAGMA busy_timeout = 5000;
+         PRAGMA journal_mode = WAL;",
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

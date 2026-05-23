@@ -101,6 +101,19 @@ pub struct ImportOutcome {
 }
 
 #[derive(Debug, Clone)]
+pub struct BinaryRegistration {
+    pub artifact_ref: ObjectRef,
+    pub run_id: i64,
+    pub parse_job_id: i64,
+    pub profile: AnalysisProfile,
+    pub project_root: PathBuf,
+    pub source_path: PathBuf,
+    pub display_name: String,
+    pub sha256: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone)]
 struct ParsedSection {
     object_ref: ObjectRef,
     name: String,
@@ -302,89 +315,101 @@ pub fn import_binary(
     connection: &Connection,
     options: ImportOptions,
 ) -> Result<ImportOutcome, ImportError> {
-    let ImportOptions {
-        project_root,
-        artifact_path,
-        profile,
-    } = options;
-    let source_path = artifact_path;
+    let source_path = options.artifact_path.clone();
     let bytes = fs::read(&source_path).map_err(|err| ImportError::Io {
-        path: source_path.clone(),
+        path: source_path,
         source: err,
     })?;
-    let sha256 = sha256_hex(&bytes);
-    let normalized_path = normalize_path(&project_root, &source_path);
-    let artifact_ref = ObjectRef::artifact(&sha256, &normalized_path)?;
-    let display_name = source_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("artifact")
-        .to_string();
+    let registration = register_binary_bytes(connection, options, &bytes)?;
+    finish_registered_binary_bytes(connection, registration, &bytes)
+}
 
-    let artifact_repo = ArtifactRepository::new(connection);
-    let object_repo = ObjectRepository::new(connection);
-    let run_repo = AnalysisRunRepository::new(connection);
+pub fn finish_registered_binary_analysis(
+    connection: &Connection,
+    registration: BinaryRegistration,
+) -> Result<ImportOutcome, ImportError> {
+    let bytes = match fs::read(&registration.source_path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            let diagnostic = AnalysisDiagnostic::new(
+                DiagnosticSeverity::Error,
+                DiagnosticStage::Parse,
+                "binary_read_failed",
+                format!(
+                    "unable to read binary artifact {}: {err}",
+                    registration.source_path.display()
+                ),
+                true,
+            )
+            .expect("static diagnostic fields are valid");
+            return fail_registered_binary_analysis(connection, registration, diagnostic);
+        }
+    };
+    finish_registered_binary_bytes(connection, registration, &bytes)
+}
+
+pub fn fail_registered_binary_analysis(
+    connection: &Connection,
+    registration: BinaryRegistration,
+    diagnostic: AnalysisDiagnostic,
+) -> Result<ImportOutcome, ImportError> {
     let job_repo = AnalysisJobRepository::new(connection);
-
-    let pending_artifact = artifact_record(ArtifactRecordInput {
-        object_ref: artifact_ref.clone(),
-        display_name: display_name.clone(),
-        source_path: &source_path,
-        sha256: &sha256,
-        size: bytes.len() as u64,
-        kind: ArtifactKind::Binary,
-        format: ArtifactFormat::Unknown,
-        architecture: "unknown",
-        status: ImportStatus::Pending,
-    });
-    artifact_repo.upsert_artifact(&pending_artifact)?;
-    object_repo.upsert_object(&StoredObject {
-        object_ref: artifact_ref.clone(),
-        artifact_key: None,
-        display_name: Some(display_name.clone()),
-        address: None,
-        size: Some(bytes.len() as u64),
-        source_run_id: None,
-        metadata_json: serde_json::json!({
-            "sha256": sha256,
-            "source_path": source_path.display().to_string(),
-            "analysis_profile": profile.as_str(),
-            "source-controlled": true
-        })
-        .to_string(),
-    })?;
-
-    let run = run_repo.start(&NewAnalysisRun::new(
-        Some(artifact_ref.key.to_string()),
-        NATIVE_BINARY_ANALYZER_ID,
-        NATIVE_BINARY_ANALYZER_VERSION,
-        format!("{}:profile:{}", sha256, profile.as_str()),
-        OffsetDateTime::now_utc(),
-    )?)?;
-    let parse_job = start_analysis_job(
+    finish_analysis_job(
         &job_repo,
-        Some(run.id),
-        &artifact_ref,
-        profile,
-        "binary.parse",
-        job_metadata(
-            serde_json::json!({ "bytes": bytes.len() }),
-            profile,
-            "binary.parse",
-            Vec::new(),
-            vec![format!(
-                "parse job queued for {} bytes with {} profile",
-                bytes.len(),
-                profile.as_str()
-            )],
-        ),
+        registration.parse_job_id,
+        AnalysisJobFinish {
+            status: "failed",
+            progress_current: 0,
+            progress_total: Some(1),
+            objects_produced: 0,
+            diagnostics_count: 1,
+            metadata: job_metadata(
+                serde_json::json!({ "diagnostic": diagnostic.clone() }),
+                registration.profile,
+                "binary.parse",
+                diagnostic_snippets(std::slice::from_ref(&diagnostic)),
+                vec!["background worker failed before parsing completed".to_string()],
+            ),
+        },
     )?;
+    persist_failure(
+        connection,
+        FailureContext {
+            artifact_ref: &registration.artifact_ref,
+            display_name: registration.display_name,
+            source_path: &registration.source_path,
+            sha256: &registration.sha256,
+            size: registration.size,
+            run_id: registration.run_id,
+            profile: registration.profile,
+            diagnostic,
+        },
+    )
+}
+
+fn finish_registered_binary_bytes(
+    connection: &Connection,
+    registration: BinaryRegistration,
+    bytes: &[u8],
+) -> Result<ImportOutcome, ImportError> {
+    let BinaryRegistration {
+        artifact_ref,
+        run_id,
+        parse_job_id,
+        profile,
+        source_path,
+        display_name,
+        sha256,
+        size,
+        ..
+    } = registration;
+    let job_repo = AnalysisJobRepository::new(connection);
 
     match parse_binary(&artifact_ref, &bytes, profile) {
         Ok(parsed) => {
             finish_analysis_job(
                 &job_repo,
-                parse_job.id,
+                parse_job_id,
                 AnalysisJobFinish {
                     status: "succeeded",
                     progress_current: 1,
@@ -414,7 +439,7 @@ pub fn import_binary(
                 display_name,
                 source_path: &source_path,
                 sha256: &sha256,
-                size: bytes.len() as u64,
+                size,
                 kind: ArtifactKind::Binary,
                 format: parsed.format,
                 architecture: &parsed.architecture,
@@ -424,7 +449,7 @@ pub fn import_binary(
                 connection,
                 &artifact_ref,
                 &indexed_artifact,
-                run.id,
+                run_id,
                 profile,
                 parsed,
             )
@@ -432,7 +457,7 @@ pub fn import_binary(
         Err(diagnostic) => {
             finish_analysis_job(
                 &job_repo,
-                parse_job.id,
+                parse_job_id,
                 AnalysisJobFinish {
                     status: "failed",
                     progress_current: 0,
@@ -455,14 +480,118 @@ pub fn import_binary(
                     display_name,
                     source_path: &source_path,
                     sha256: &sha256,
-                    size: bytes.len() as u64,
-                    run_id: run.id,
+                    size,
+                    run_id,
                     profile,
                     diagnostic,
                 },
             )
         }
     }
+}
+
+pub fn register_binary_for_analysis(
+    connection: &Connection,
+    options: ImportOptions,
+) -> Result<BinaryRegistration, ImportError> {
+    let source_path = options.artifact_path.clone();
+    let bytes = fs::read(&source_path).map_err(|err| ImportError::Io {
+        path: source_path,
+        source: err,
+    })?;
+    register_binary_bytes(connection, options, &bytes)
+}
+
+fn register_binary_bytes(
+    connection: &Connection,
+    options: ImportOptions,
+    bytes: &[u8],
+) -> Result<BinaryRegistration, ImportError> {
+    let ImportOptions {
+        project_root,
+        artifact_path,
+        profile,
+    } = options;
+    let source_path = artifact_path;
+    let sha256 = sha256_hex(&bytes);
+    let size = bytes.len() as u64;
+    let normalized_path = normalize_path(&project_root, &source_path);
+    let artifact_ref = ObjectRef::artifact(&sha256, &normalized_path)?;
+    let display_name = source_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact")
+        .to_string();
+
+    let artifact_repo = ArtifactRepository::new(connection);
+    let object_repo = ObjectRepository::new(connection);
+    let run_repo = AnalysisRunRepository::new(connection);
+    let job_repo = AnalysisJobRepository::new(connection);
+
+    let pending_artifact = artifact_record(ArtifactRecordInput {
+        object_ref: artifact_ref.clone(),
+        display_name: display_name.clone(),
+        source_path: &source_path,
+        sha256: &sha256,
+        size,
+        kind: ArtifactKind::Binary,
+        format: ArtifactFormat::Unknown,
+        architecture: "unknown",
+        status: ImportStatus::Pending,
+    });
+    artifact_repo.upsert_artifact(&pending_artifact)?;
+    object_repo.upsert_object(&StoredObject {
+        object_ref: artifact_ref.clone(),
+        artifact_key: None,
+        display_name: Some(display_name.clone()),
+        address: None,
+        size: Some(size),
+        source_run_id: None,
+        metadata_json: serde_json::json!({
+            "sha256": sha256.clone(),
+            "source_path": source_path.display().to_string(),
+            "analysis_profile": profile.as_str(),
+            "source-controlled": true
+        })
+        .to_string(),
+    })?;
+
+    let run = run_repo.start(&NewAnalysisRun::new(
+        Some(artifact_ref.key.to_string()),
+        NATIVE_BINARY_ANALYZER_ID,
+        NATIVE_BINARY_ANALYZER_VERSION,
+        format!("{}:profile:{}", sha256, profile.as_str()),
+        OffsetDateTime::now_utc(),
+    )?)?;
+    let parse_job = start_analysis_job(
+        &job_repo,
+        Some(run.id),
+        &artifact_ref,
+        profile,
+        "binary.parse",
+        job_metadata(
+            serde_json::json!({ "bytes": size }),
+            profile,
+            "binary.parse",
+            Vec::new(),
+            vec![format!(
+                "parse job queued for {size} bytes with {} profile",
+                profile.as_str()
+            )],
+        ),
+    )?;
+
+    Ok(BinaryRegistration {
+        artifact_ref,
+        run_id: run.id,
+        parse_job_id: parse_job.id,
+        profile,
+        project_root,
+        source_path,
+        display_name,
+        sha256,
+        size,
+    })
 }
 
 fn persist_success(

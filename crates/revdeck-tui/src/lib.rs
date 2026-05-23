@@ -17,20 +17,22 @@ use revdeck_core::{
     AnalysisJobsSummary, CommandDiagnostic, CommandDiagnosticKind, CommandExecutor, CommandOutcome,
     CommandParser, CommandResolver, CommandState, ExportFormat, Finding, FindingEvidence,
     FindingSeverity, FindingStatus, FunctionRadarFilter, FunctionRadarViewModel, FunctionScore,
-    GraphEdgeDetail, GraphLabViewModel, InspectorViewModel, NavigationEntry, NavigationLens,
-    ObjectGraphQuery, ObjectKind, ObjectRef, ObjectRelation, ObjectSearch, ObjectSummary,
-    QueryError, RelationDirection, RelationFilter, ResolvedCommand, StableObjectKey,
+    GraphEdgeDetail, GraphLabViewModel, HexViewModel, InspectorViewModel, NavigationEntry,
+    NavigationLens, ObjectGraphQuery, ObjectKind, ObjectRef, ObjectRelation, ObjectSearch,
+    ObjectSummary, QueryError, RelationDirection, RelationFilter, ResolvedCommand, StableObjectKey,
     TraversalOptions, TriageBoardViewModel, WORKSPACE_LENSES,
 };
 use revdeck_db::{
-    AnalysisJobRecord, AnalysisJobRepository, ArtifactRepository, FindingRepository,
-    IndexRepository, MemoryRepository, ObjectQueryRepository, ProjectDatabase, RadarRepository,
+    AnalysisJobRecord, AnalysisJobRepository, ArtifactRecord, ArtifactRepository,
+    FindingRepository, IndexRepository, MemoryRepository, ObjectQueryRepository, ProjectDatabase,
+    RadarRepository,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io,
-    path::Path,
-    time::Duration,
+    fs::File,
+    io::{self, Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -46,6 +48,8 @@ const PANE_FOCUS_ORDER: [PaneFocus; 3] =
 const GRAPH_LAB_MAX_DEPTH: usize = 2;
 const GRAPH_LAB_MAX_NODES: usize = 64;
 const GRAPH_LAB_ACTIVE_FILTER: RelationFilter = RelationFilter::All;
+const SNAPSHOT_REFRESH_INTERVAL: Duration = Duration::from_millis(750);
+const HEX_WINDOW_BYTES: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceSnapshot {
@@ -65,6 +69,7 @@ pub struct WorkspaceSnapshot {
     pub findings: Vec<Finding>,
     pub analysis_jobs: Vec<AnalysisJobRow>,
     pub analysis_jobs_summary: AnalysisJobsSummary,
+    pub hex: HexViewModel,
     pub objects: BTreeMap<ObjectRef, ObjectSummary>,
     pub relations_by_object: BTreeMap<ObjectRef, Vec<ObjectRelation>>,
 }
@@ -98,6 +103,7 @@ impl WorkspaceSnapshot {
             findings: Vec::new(),
             analysis_jobs: Vec::new(),
             analysis_jobs_summary: AnalysisJobsSummary::default(),
+            hex: HexViewModel::empty("no artifact bytes loaded"),
             objects: BTreeMap::new(),
             relations_by_object: BTreeMap::new(),
         }
@@ -182,6 +188,10 @@ impl WorkspaceSnapshot {
             .map(|record| analysis_job_row_from_record(&record))
             .collect::<Vec<_>>();
         let analysis_jobs_summary = AnalysisJobsSummary::from_rows(&analysis_jobs);
+        let hex = artifact
+            .as_ref()
+            .map(|artifact| load_hex_view(project.info().root_dir.as_path(), artifact, 0))
+            .unwrap_or_else(|| HexViewModel::empty("artifact metadata missing"));
 
         let functions = search_kind(&query, ObjectKind::Function, 500)?;
         let basic_blocks = search_kind(&query, ObjectKind::BasicBlock, 1000)?;
@@ -269,6 +279,7 @@ impl WorkspaceSnapshot {
             findings,
             analysis_jobs,
             analysis_jobs_summary,
+            hex,
             objects,
             relations_by_object,
         })
@@ -1261,6 +1272,13 @@ impl WorkspaceSnapshot {
             },
         ];
         let analysis_jobs_summary = AnalysisJobsSummary::from_rows(&analysis_jobs);
+        let hex = HexViewModel::from_bytes(
+            artifact.clone(),
+            "fixtures/sensitive_imports_elf",
+            32,
+            0,
+            b"\x7fELFRevDeck demo bytes for hex view",
+        );
         Self {
             overview,
             triage,
@@ -1278,6 +1296,7 @@ impl WorkspaceSnapshot {
             findings: Vec::new(),
             analysis_jobs,
             analysis_jobs_summary,
+            hex,
             objects,
             relations_by_object,
         }
@@ -1288,6 +1307,7 @@ impl WorkspaceSnapshot {
             NavigationLens::Overview | NavigationLens::BinaryMap => {
                 self.overview.artifact.iter().cloned().collect()
             }
+            NavigationLens::Hex => self.hex.artifact.iter().cloned().collect(),
             NavigationLens::TriageBoard => self
                 .triage
                 .rows
@@ -1389,6 +1409,10 @@ impl WorkspaceSnapshot {
 
     pub fn selected_job(&self, cursor: usize) -> Option<&AnalysisJobRow> {
         self.analysis_jobs.get(cursor)
+    }
+
+    pub fn has_active_analysis_jobs(&self) -> bool {
+        self.analysis_jobs_summary.running > 0 || self.analysis_jobs_summary.queued > 0
     }
 
     pub fn relations_for(&self, selected: &ObjectRef) -> &[ObjectRelation] {
@@ -1519,6 +1543,68 @@ impl ObjectGraphQuery for WorkspaceSnapshot {
         });
         Ok(matches)
     }
+}
+
+fn load_hex_view(project_root: &Path, artifact: &ArtifactRecord, base_offset: u64) -> HexViewModel {
+    let Some(path) = resolve_artifact_bytes_path(project_root, artifact) else {
+        return HexViewModel::empty(format!("missing byte source for {}", artifact.display_name));
+    };
+    let mut file = match File::open(&path) {
+        Ok(file) => file,
+        Err(err) => {
+            return HexViewModel::empty(format!(
+                "failed to open byte source {}: {err}",
+                path.display()
+            ));
+        }
+    };
+    let file_size = match file.metadata() {
+        Ok(metadata) => metadata.len(),
+        Err(err) => {
+            return HexViewModel::empty(format!(
+                "failed to stat byte source {}: {err}",
+                path.display()
+            ));
+        }
+    };
+    let base_offset = base_offset.min(file_size);
+    if let Err(err) = file.seek(SeekFrom::Start(base_offset)) {
+        return HexViewModel::empty(format!(
+            "failed to seek byte source {}: {err}",
+            path.display()
+        ));
+    }
+    let read_len = HEX_WINDOW_BYTES.min(file_size.saturating_sub(base_offset) as usize);
+    let mut bytes = vec![0_u8; read_len];
+    if let Err(err) = file.read_exact(&mut bytes) {
+        return HexViewModel::empty(format!(
+            "failed to read byte source {}: {err}",
+            path.display()
+        ));
+    }
+    HexViewModel::from_bytes(
+        artifact.object_ref.clone(),
+        path.display().to_string(),
+        file_size,
+        base_offset,
+        &bytes,
+    )
+}
+
+fn resolve_artifact_bytes_path(project_root: &Path, artifact: &ArtifactRecord) -> Option<PathBuf> {
+    artifact
+        .stored_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| Some(PathBuf::from(&artifact.source_path)))
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                project_root.join(path)
+            }
+        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1857,6 +1943,9 @@ impl TuiShellState {
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.apply_action(TuiAction::Quit, snapshot)?;
             }
+            KeyCode::Char('x') | KeyCode::Char('H') => {
+                self.switch_lens(NavigationLens::Hex, snapshot)
+            }
             KeyCode::Char('g') => self.switch_lens(NavigationLens::TriageBoard, snapshot),
             KeyCode::Char('G') => self.switch_lens(NavigationLens::LocalGraph, snapshot),
             KeyCode::Char('J') => self.switch_lens(NavigationLens::Jobs, snapshot),
@@ -2039,6 +2128,28 @@ impl TuiShellState {
         Ok(summary)
     }
 
+    pub fn reconcile_after_refresh(
+        &mut self,
+        previous: &WorkspaceSnapshot,
+        next: &WorkspaceSnapshot,
+    ) {
+        if let Some(selected) = self.selected.as_ref() {
+            if !next.objects.contains_key(selected)
+                && next.rows_for_lens(self.active_lens).is_empty()
+                && !previous.rows_for_lens(self.active_lens).is_empty()
+            {
+                self.selected = None;
+                self.command_state.current_object = None;
+            }
+        }
+        self.clamp_cursors(next);
+        if self.selected.is_none() && self.active_lens != NavigationLens::Jobs {
+            self.sync_selection_from_cursor(next);
+        } else {
+            self.command_state.current_object = self.selected.clone();
+        }
+    }
+
     fn switch_lens(&mut self, lens: NavigationLens, snapshot: &WorkspaceSnapshot) {
         self.active_lens = lens;
         if let Some(index) = WORKSPACE_LENSES
@@ -2053,6 +2164,52 @@ impl TuiShellState {
         self.command_state.current_lens = lens;
         self.sync_selection_from_cursor(snapshot);
         self.status_line = format!("lens {}", lens_label(lens));
+    }
+
+    fn clamp_cursors(&mut self, snapshot: &WorkspaceSnapshot) {
+        self.nav_index = self.nav_index.min(WORKSPACE_LENSES.len().saturating_sub(1));
+        if self.active_lens == NavigationLens::Jobs {
+            let len = snapshot.analysis_jobs.len();
+            self.main_cursor = if len == 0 {
+                0
+            } else {
+                self.main_cursor.min(len.saturating_sub(1))
+            };
+        } else if self.active_lens == NavigationLens::Hex {
+            let len = snapshot.hex.rows.len();
+            self.main_cursor = if len == 0 {
+                0
+            } else {
+                self.main_cursor.min(len.saturating_sub(1))
+            };
+        } else if self.active_lens == NavigationLens::LocalGraph {
+            if let Some(selected) = self.selected.as_ref() {
+                let len = graph_row_count(snapshot, selected);
+                self.main_cursor = if len == 0 {
+                    0
+                } else {
+                    self.main_cursor.min(len.saturating_sub(1))
+                };
+            } else {
+                self.main_cursor = 0;
+            }
+        } else {
+            let len = snapshot.rows_for_lens(self.active_lens).len();
+            self.main_cursor = if len == 0 {
+                0
+            } else {
+                self.main_cursor.min(len.saturating_sub(1))
+            };
+        }
+        let inspector_len = inspector_lines(self, snapshot).len();
+        self.inspector_cursor = if inspector_len == 0 {
+            0
+        } else {
+            self.inspector_cursor.min(inspector_len.saturating_sub(1))
+        };
+        self.inspector_scroll = self
+            .inspector_scroll
+            .min(self.inspector_cursor.saturating_sub(1) as u16);
     }
 
     fn focus_next_pane(&mut self, delta: isize) {
@@ -2101,6 +2258,23 @@ impl TuiShellState {
     }
 
     fn move_row(&mut self, snapshot: &WorkspaceSnapshot, delta: isize) {
+        if self.active_lens == NavigationLens::Hex {
+            if snapshot.hex.rows.is_empty() {
+                self.main_cursor = 0;
+                self.selected = snapshot.hex.artifact.clone();
+                self.command_state.current_object = self.selected.clone();
+                self.inspector_cursor = 0;
+                self.inspector_scroll = 0;
+                return;
+            }
+            let len = snapshot.hex.rows.len() as isize;
+            self.main_cursor = (self.main_cursor as isize + delta).rem_euclid(len) as usize;
+            self.selected = snapshot.hex.artifact.clone();
+            self.command_state.current_object = self.selected.clone();
+            self.inspector_cursor = 0;
+            self.inspector_scroll = 0;
+            return;
+        }
         if self.active_lens == NavigationLens::Jobs {
             if snapshot.analysis_jobs.is_empty() {
                 self.main_cursor = 0;
@@ -2200,6 +2374,19 @@ impl TuiShellState {
             }
             self.selected = None;
             self.command_state.current_object = None;
+            self.command_state.current_lens = self.active_lens;
+            self.inspector_cursor = 0;
+            self.inspector_scroll = 0;
+            return;
+        }
+        if self.active_lens == NavigationLens::Hex {
+            if snapshot.hex.rows.is_empty() {
+                self.main_cursor = 0;
+            } else if self.main_cursor >= snapshot.hex.rows.len() {
+                self.main_cursor = snapshot.hex.rows.len() - 1;
+            }
+            self.selected = snapshot.hex.artifact.clone();
+            self.command_state.current_object = self.selected.clone();
             self.command_state.current_lens = self.active_lens;
             self.inspector_cursor = 0;
             self.inspector_scroll = 0;
@@ -2321,16 +2508,15 @@ pub fn run_project_tui(project_dir: impl AsRef<Path>) -> anyhow::Result<()> {
             project_dir.as_ref().display()
         )
     })?;
-    let snapshot = WorkspaceSnapshot::load_from_project(&project)?;
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project)?;
     let mut app = TuiShellState::from_snapshot(&snapshot);
-    let query = ObjectQueryRepository::new(project.connection());
 
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).context("failed to enter alternate screen")?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("failed to create terminal")?;
-    let result = run_terminal_app(&mut terminal, &mut app, &snapshot, &query);
+    let result = run_project_terminal_app(&mut terminal, &mut app, &mut snapshot, &project);
     let restore_result = restore_terminal(&mut terminal);
     result.and(restore_result)?;
     let summary = app.persist_session_to_project(&project)?;
@@ -2360,6 +2546,61 @@ pub fn run_terminal_app<B: Backend>(
                     let _ = app.handle_key_event(key, snapshot, query);
                 }
             }
+        }
+    }
+}
+
+fn should_refresh_snapshot(snapshot: &WorkspaceSnapshot, last_refresh: Instant) -> bool {
+    snapshot.has_active_analysis_jobs() && last_refresh.elapsed() >= SNAPSHOT_REFRESH_INTERVAL
+}
+
+fn refresh_status_line(snapshot: &WorkspaceSnapshot) -> String {
+    let summary = &snapshot.analysis_jobs_summary;
+    if summary.running > 0 || summary.queued > 0 {
+        format!(
+            "analysis refresh: running={} queued={} succeeded={} failed={}",
+            summary.running, summary.queued, summary.succeeded, summary.failed
+        )
+    } else {
+        format!(
+            "analysis refresh: complete succeeded={} failed={} skipped={}",
+            summary.succeeded, summary.failed, summary.skipped
+        )
+    }
+}
+
+fn run_project_terminal_app<B: Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut TuiShellState,
+    snapshot: &mut WorkspaceSnapshot,
+    project: &ProjectDatabase,
+) -> anyhow::Result<()> {
+    let mut last_refresh = Instant::now();
+    loop {
+        terminal.draw(|frame| render_workspace(frame, app, snapshot))?;
+        if app.should_quit {
+            return Ok(());
+        }
+        if event::poll(Duration::from_millis(200)).context("failed to poll terminal events")? {
+            if let Event::Key(key) = event::read().context("failed to read terminal event")? {
+                if key.kind == KeyEventKind::Press {
+                    let query = ObjectQueryRepository::new(project.connection());
+                    let _ = app.handle_key_event(key, snapshot, &query);
+                }
+            }
+        }
+        if should_refresh_snapshot(snapshot, last_refresh) {
+            match WorkspaceSnapshot::load_from_project(project) {
+                Ok(next_snapshot) => {
+                    app.reconcile_after_refresh(snapshot, &next_snapshot);
+                    *snapshot = next_snapshot;
+                    app.status_line = refresh_status_line(snapshot);
+                }
+                Err(err) => {
+                    app.status_line = format!("refresh failed: {err}");
+                }
+            }
+            last_refresh = Instant::now();
         }
     }
 }
@@ -2612,6 +2853,7 @@ fn render_main_view(
         NavigationLens::Overview => render_overview(frame, area, app, snapshot),
         NavigationLens::TriageBoard => render_triage_board(frame, area, app, snapshot),
         NavigationLens::Jobs => render_analysis_jobs(frame, area, app, snapshot),
+        NavigationLens::Hex => render_hex_viewer(frame, area, app, snapshot),
         NavigationLens::BinaryMap => render_binary_map(frame, area, app, snapshot),
         NavigationLens::FunctionRadar => render_function_radar(frame, area, app, snapshot),
         NavigationLens::Functions => {
@@ -2913,6 +3155,81 @@ fn render_analysis_jobs(
                 summary.skipped,
                 lens_help(NavigationLens::Jobs)
             ))
+            .borders(Borders::ALL),
+    );
+    frame.render_widget(table, area);
+}
+
+fn render_hex_viewer(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &TuiShellState,
+    snapshot: &WorkspaceSnapshot,
+) {
+    let hex = &snapshot.hex;
+    if hex.rows.is_empty() {
+        let lines = vec![
+            Line::from("Hex Viewer"),
+            Line::from(hex.status.clone()),
+            Line::from(
+                "This read-only lens streams bounded byte windows from the artifact source.",
+            ),
+        ];
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(main_view_block(app, NavigationLens::Hex).borders(Borders::ALL))
+                .wrap(Wrap { trim: true }),
+            area,
+        );
+        return;
+    }
+
+    let rows = hex
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let style = if index == app.main_cursor {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default()
+            };
+            Row::new(vec![
+                Cell::from(format!("0x{:08x}", row.offset)),
+                Cell::from(row.hex.clone()),
+                Cell::from(row.ascii.clone()),
+            ])
+            .style(style)
+        })
+        .collect::<Vec<_>>();
+    let selected_offset = hex
+        .rows
+        .get(app.main_cursor)
+        .map(|row| row.offset)
+        .unwrap_or(hex.selected_offset);
+    let file_size = hex
+        .file_size
+        .map(|value: u64| value.to_string())
+        .unwrap_or_else(|| "?".to_string());
+    let title = format!(
+        "Main View - Hex Viewer | offset=0x{selected_offset:08x} base=0x{:08x} size={} | read-only bounded window",
+        hex.base_offset, file_size
+    );
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(12),
+            Constraint::Length(48),
+            Constraint::Min(16),
+        ],
+    )
+    .header(
+        Row::new(vec!["offset", "hex bytes", "ascii"])
+            .style(Style::default().add_modifier(Modifier::BOLD)),
+    )
+    .block(
+        main_view_block(app, NavigationLens::Hex)
+            .title(title)
             .borders(Borders::ALL),
     );
     frame.render_widget(table, area);
@@ -5079,7 +5396,7 @@ fn help_overlay_lines(app: &TuiShellState, snapshot: &WorkspaceSnapshot) -> Vec<
             Style::default().add_modifier(Modifier::BOLD),
         )]),
         Line::from("Tab/Shift+Tab panes; Left/Right columns; Up/Down or j/k moves; Enter opens or jumps."),
-        Line::from("Lenses: g triage, G graph, D diff, T trace, W firmware, C crash, P protocol, J jobs, o overview, b binary, r radar, f functions, s strings, i imports, n notes, F findings."),
+        Line::from("Lenses: g triage, x hex, G graph, D diff, T trace, W firmware, C crash, P protocol, J jobs, o overview, b binary, r radar, f functions, s strings, i imports, n notes, F findings."),
         Line::from("History: [ back, ] forward. Commands: p deck, : command mode. Quit: q or Esc outside help."),
         Line::from(""),
         Line::from(vec![Span::styled(
@@ -5090,6 +5407,7 @@ fn help_overlay_lines(app: &TuiShellState, snapshot: &WorkspaceSnapshot) -> Vec<
         Line::from(":tag current suspicious  :note current reviewed path  :rename current name  :status current reviewed"),
         Line::from(":finding new high title  :finding link <finding> current evidence"),
         Line::from(":export markdown report.md  :export json report.json"),
+        Line::from("Fast open: analyze enters the TUI after registration; use J for Jobs and x for Hex Viewer while background analysis runs."),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Current next step",
@@ -5123,6 +5441,8 @@ fn command_deck_lines(app: &TuiShellState, snapshot: &WorkspaceSnapshot) -> Vec<
         Line::from(":xrefs current             load local relations into Graph Lab"),
         Line::from(":find string <term>        search strings"),
         Line::from(":find import <term>        search imports"),
+        Line::from("x / H                       open read-only Hex Viewer"),
+        Line::from("J                           inspect background analysis jobs"),
         Line::from(":tag current <tag>         add analysis memory"),
         Line::from(":note current <text>       add analyst note"),
         Line::from(":finding new high <title>  create finding draft"),
@@ -5171,7 +5491,7 @@ fn context_help(app: &TuiShellState, snapshot: &WorkspaceSnapshot) -> String {
         .map(|object_ref| snapshot.object_label(object_ref))
         .unwrap_or_else(|| "none".to_string());
     format!(
-        "Focus: {} | View: {} | Selected: {} | ? help, p deck, Tab/Shift+Tab panes, Left/Right columns, Up/Down move, Enter open/jump, : commands, g triage, G graph, D diff, T trace, W firmware, C crash, P protocol, J jobs, q quit",
+        "Focus: {} | View: {} | Selected: {} | ? help, p deck, Tab/Shift+Tab panes, Left/Right columns, Up/Down move, Enter open/jump, : commands, g triage, x hex, G graph, D diff, T trace, W firmware, C crash, P protocol, J jobs, q quit",
         pane_focus_label(app.focus),
         lens_label(app.active_lens),
         truncate(&selected, 28)

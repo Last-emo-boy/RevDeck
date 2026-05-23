@@ -873,6 +873,7 @@ version = "0.1.0"
 dependencies = [
  "revdeck-core",
  "revdeck-db",
+ "revdeck-index",
  "tempfile",
  "time",
 ]

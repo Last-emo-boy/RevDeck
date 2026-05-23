@@ -9,6 +9,6 @@ rust-version.workspace = true
 [dependencies]
 revdeck-core = { path = "../../crates/revdeck-core" }
 revdeck-db = { path = "../../crates/revdeck-db" }
+revdeck-index = { path = "../../crates/revdeck-index" }
 tempfile.workspace = true
 time.workspace = true
-

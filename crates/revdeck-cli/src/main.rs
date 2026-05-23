@@ -1,8 +1,9 @@
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
 use revdeck_core::{
-    pre_export_validation, render_json_bundle, render_markdown, DiffSummaryViewModel, LabSummary,
-    ObjectKind, ObjectRef, StableObjectKey,
+    pre_export_validation, render_json_bundle, render_markdown, AnalysisDiagnostic,
+    DiagnosticSeverity, DiagnosticStage, DiffSummaryViewModel, LabSummary, ObjectKind, ObjectRef,
+    StableObjectKey,
 };
 use revdeck_db::{
     migrations, AnalysisJobRepository, CrashFrameRecord, CrashImportOutcome, CrashReportRecord,
@@ -11,10 +12,15 @@ use revdeck_db::{
     ProtocolFieldRecord, ProtocolImportOutcome, ProtocolMessageRecord, ProtocolRepository,
     ProtocolSampleRecord, TraceImportOutcome, TraceRepository, TraceSessionRecord,
 };
-use revdeck_index::{import_binary, AnalysisProfile, ImportOptions, ImportOutcome};
+use revdeck_index::{
+    fail_registered_binary_analysis, finish_registered_binary_analysis, import_binary,
+    register_binary_for_analysis, AnalysisProfile, BinaryRegistration, ImportOptions,
+    ImportOutcome,
+};
 use std::{
     fs,
     path::{Path, PathBuf},
+    thread,
 };
 use time::OffsetDateTime;
 
@@ -29,11 +35,15 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Analyze {
+        /// Binary to register, analyze, and open in the TUI.
         binary_path: PathBuf,
+        /// Project directory. Defaults to .revdeck/workspaces/<binary>-<hash>.
         #[arg(long)]
         project: Option<PathBuf>,
+        /// Analysis profile: quick opens fastest, balanced is default, deep is reserved for heavier analysis.
         #[arg(long, value_enum, default_value_t = CliAnalysisProfile::Balanced)]
         profile: CliAnalysisProfile,
+        /// Run analysis in the foreground and print the final JSON outcome instead of opening the TUI.
         #[arg(long)]
         no_tui: bool,
     },
@@ -244,13 +254,25 @@ fn main() -> anyhow::Result<()> {
             let project = ProjectDatabase::create_or_open(&project_dir).with_context(|| {
                 format!("failed to initialize project at {}", project_dir.display())
             })?;
+            let profile = AnalysisProfile::from(profile);
+            if !no_tui {
+                let registration = register_binary_for_analysis(
+                    project.connection(),
+                    ImportOptions::with_profile(project_dir.clone(), binary_path.clone(), profile),
+                )
+                .map_err(|err| anyhow::anyhow!(err.structured_message()))?;
+                println!(
+                    "{}",
+                    registration_json(&registration, Some(&project), "background-running")
+                );
+                drop(project);
+                spawn_registered_analysis_worker(project_dir.clone(), registration);
+                revdeck_tui::run_project_tui(project_dir)?;
+                return Ok(());
+            }
             let outcome = import_binary(
                 project.connection(),
-                ImportOptions::with_profile(
-                    project_dir.clone(),
-                    binary_path.clone(),
-                    profile.into(),
-                ),
+                ImportOptions::with_profile(project_dir.clone(), binary_path.clone(), profile),
             )
             .map_err(|err| anyhow::anyhow!(err.structured_message()))?;
             println!("{}", outcome_json(&outcome, Some(&project)));
@@ -1154,6 +1176,73 @@ fn outcome_json(outcome: &ImportOutcome, project: Option<&ProjectDatabase>) -> s
         value["database"] = serde_json::json!(project.info().db_path.display().to_string());
     }
     value
+}
+
+fn registration_json(
+    registration: &BinaryRegistration,
+    project: Option<&ProjectDatabase>,
+    status: &str,
+) -> serde_json::Value {
+    let mut value = serde_json::json!({
+        "status": status,
+        "profile": registration.profile.as_str(),
+        "artifact": registration.artifact_ref.to_string(),
+        "analysis_run": registration.run_id,
+        "parse_job": registration.parse_job_id,
+        "source_path": registration.source_path.display().to_string(),
+        "display_name": registration.display_name,
+        "sha256": registration.sha256,
+        "size": registration.size,
+        "background": true,
+        "tui": true
+    });
+    if let Some(project) = project {
+        value["project"] = serde_json::json!(project.info().root_dir.display().to_string());
+        value["database"] = serde_json::json!(project.info().db_path.display().to_string());
+    }
+    value
+}
+
+fn spawn_registered_analysis_worker(project_dir: PathBuf, registration: BinaryRegistration) {
+    thread::spawn(move || {
+        if let Err(err) = run_registered_analysis_worker(&project_dir, registration) {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "status": "background-analysis-failed",
+                    "project": project_dir.display().to_string(),
+                    "error": err.to_string()
+                })
+            );
+        }
+    });
+}
+
+fn run_registered_analysis_worker(
+    project_dir: &Path,
+    registration: BinaryRegistration,
+) -> anyhow::Result<()> {
+    let project = ProjectDatabase::open_existing(project_dir).with_context(|| {
+        format!(
+            "failed to open project at {} for background analysis",
+            project_dir.display()
+        )
+    })?;
+    match finish_registered_binary_analysis(project.connection(), registration.clone()) {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            let diagnostic = AnalysisDiagnostic::new(
+                DiagnosticSeverity::Error,
+                DiagnosticStage::Parse,
+                "background_analysis_failed",
+                err.to_string(),
+                true,
+            )
+            .expect("static diagnostic fields are valid");
+            let _ = fail_registered_binary_analysis(project.connection(), registration, diagnostic);
+            Err(anyhow::anyhow!(err.structured_message()))
+        }
+    }
 }
 
 fn jobs_json(jobs: &[revdeck_db::AnalysisJobRecord]) -> serde_json::Value {

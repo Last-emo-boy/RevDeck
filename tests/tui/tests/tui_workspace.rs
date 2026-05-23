@@ -445,7 +445,7 @@ fn render_help_overlay() {
     let snapshot = WorkspaceSnapshot::demo();
     let mut app = TuiShellState::from_snapshot(&snapshot);
     app.apply_action(TuiAction::ToggleHelp, &snapshot).unwrap();
-    let backend = TestBackend::new(120, 30);
+    let backend = TestBackend::new(120, 46);
     let mut terminal = Terminal::new(backend).unwrap();
 
     terminal
@@ -707,7 +707,7 @@ fn graph_lab_shortcut_preserves_selection_and_renders_relations() {
     assert_eq!(app.active_lens, NavigationLens::LocalGraph);
     assert_eq!(app.selected.as_ref(), Some(&function));
 
-    let backend = TestBackend::new(120, 30);
+    let backend = TestBackend::new(120, 48);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| render_workspace(frame, &app, &snapshot))
@@ -734,12 +734,16 @@ fn graph_lab_cursor_selects_edge_detail_for_inspector() {
     let root = app.selected.clone().unwrap();
     app.apply_action(TuiAction::SwitchLens(NavigationLens::LocalGraph), &snapshot)
         .unwrap();
-    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
-    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    let edge_cursor = snapshot
+        .local_graph_model(&root, revdeck_core::RelationFilter::All, 2, 64)
+        .unwrap()
+        .path_rows
+        .len();
+    app.main_cursor = edge_cursor;
 
     assert_eq!(app.selected.as_ref(), Some(&root));
 
-    let backend = TestBackend::new(120, 34);
+    let backend = TestBackend::new(120, 48);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| render_workspace(frame, &app, &snapshot))
@@ -1329,6 +1333,49 @@ fn project_snapshot_loads_artifact_scoped_analysis_jobs() {
     assert!(text.contains("triage"));
     assert!(text.contains("skipped"));
     assert!(text.contains("quick"));
+}
+
+#[test]
+fn project_snapshot_loads_hex_view_before_full_indexing() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("fixtures")
+        .join("binaries")
+        .join("minimal_elf");
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+
+    let snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+
+    assert_eq!(snapshot.overview.import_status, "pending");
+    assert_eq!(snapshot.analysis_jobs_summary.running, 1);
+    assert!(!snapshot.hex.rows.is_empty());
+    assert_eq!(snapshot.hex.rows[0].offset, 0);
+    assert!(snapshot.hex.rows[0].hex.starts_with("7f 45 4c 46"));
+
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Hex), &snapshot)
+        .unwrap();
+    let backend = TestBackend::new(150, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("Hex Viewer"));
+    assert!(text.contains("7f 45 4c 46"));
+    assert!(text.contains("read-only"));
 }
 
 #[test]

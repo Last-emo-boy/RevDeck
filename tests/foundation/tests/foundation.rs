@@ -1,10 +1,18 @@
 use revdeck_core::{NewAnalysisRun, ObjectKind, ObjectRef, StableObjectKey};
 use revdeck_db::{
-    migrations::current_version, AnalysisRunRepository, ArtifactRecord, ArtifactRepository,
-    ObjectRepository, ProjectDatabase, StoredObject,
+    migrations::current_version, AnalysisJobRepository, AnalysisRunRepository, ArtifactRecord,
+    ArtifactRepository, IndexRepository, ObjectRepository, ProjectDatabase, StoredObject,
 };
+use revdeck_index::{register_binary_for_analysis, AnalysisProfile, ImportOptions};
+use std::path::PathBuf;
 use tempfile::tempdir;
 use time::macros::datetime;
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+}
 
 #[test]
 fn project_creation_reopen_and_foundation_records_are_deterministic() {
@@ -98,5 +106,76 @@ fn project_creation_reopen_and_foundation_records_are_deterministic() {
             .unwrap()
             .object_ref,
         function_ref
+    );
+}
+
+#[test]
+fn binary_registration_records_pending_artifact_before_indexing() {
+    let workspace = workspace_root();
+    let binary = workspace
+        .join("fixtures")
+        .join("binaries")
+        .join("minimal_elf");
+    let temp = tempdir().unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+
+    let registration = register_binary_for_analysis(
+        project.connection(),
+        ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary.clone(),
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(registration.profile, AnalysisProfile::Quick);
+    assert_eq!(registration.source_path, binary);
+    assert_eq!(registration.display_name, "minimal_elf");
+    assert!(registration.size > 0);
+
+    let artifact = ArtifactRepository::new(project.connection())
+        .get_artifact(&registration.artifact_ref)
+        .unwrap()
+        .unwrap();
+    assert_eq!(artifact.import_status, "pending");
+    assert_eq!(artifact.format, "unknown");
+    assert_eq!(artifact.architecture, "unknown");
+    assert_eq!(artifact.size, registration.size);
+
+    let object = ObjectRepository::new(project.connection())
+        .get_object(&registration.artifact_ref)
+        .unwrap()
+        .unwrap();
+    assert_eq!(object.object_ref, registration.artifact_ref);
+    assert_eq!(object.display_name.as_deref(), Some("minimal_elf"));
+    assert_eq!(object.size, Some(registration.size));
+
+    let run = AnalysisRunRepository::new(project.connection())
+        .get(registration.run_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(run.status.as_str(), "running");
+    assert_eq!(
+        run.artifact_key.as_deref(),
+        Some(registration.artifact_ref.key.as_str())
+    );
+
+    let parse_job = AnalysisJobRepository::new(project.connection())
+        .get(registration.parse_job_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(parse_job.pass_name, "binary.parse");
+    assert_eq!(parse_job.status, "running");
+    assert_eq!(
+        parse_job.artifact_key.as_deref(),
+        Some(registration.artifact_ref.key.as_str())
+    );
+
+    assert_eq!(
+        IndexRepository::new(project.connection())
+            .count_kind(&registration.artifact_ref, ObjectKind::Function)
+            .unwrap(),
+        0
     );
 }
