@@ -49,7 +49,6 @@ const PANE_FOCUS_ORDER: [PaneFocus; 3] =
     [PaneFocus::Workspace, PaneFocus::Main, PaneFocus::Inspector];
 const GRAPH_LAB_MAX_DEPTH: usize = 2;
 const GRAPH_LAB_MAX_NODES: usize = 64;
-const GRAPH_LAB_ACTIVE_FILTER: RelationFilter = RelationFilter::All;
 const SNAPSHOT_REFRESH_INTERVAL: Duration = Duration::from_millis(750);
 const HEX_WINDOW_BYTES: usize = 256;
 const HEX_SEARCH_CHUNK_BYTES: usize = 64 * 1024;
@@ -2459,6 +2458,8 @@ pub enum TuiAction {
     Forward,
     ToggleHelp,
     ToggleCommandDeck,
+    NextGraphFilter,
+    PreviousGraphFilter,
     EnterCommandMode,
     ExitCommandMode,
     PushCommandChar(char),
@@ -2478,6 +2479,7 @@ pub struct TuiShellState {
     pub command_mode: bool,
     pub command_input: String,
     pub command_state: CommandState,
+    pub graph_filter: RelationFilter,
     pub status_line: String,
     pub last_error: Option<CommandDiagnostic>,
     pub show_help: bool,
@@ -2498,6 +2500,7 @@ impl Default for TuiShellState {
             command_mode: false,
             command_input: String::new(),
             command_state: CommandState::default(),
+            graph_filter: RelationFilter::All,
             status_line: "ready".to_string(),
             last_error: None,
             show_help: false,
@@ -2658,6 +2661,14 @@ impl TuiShellState {
                 } else {
                     "command deck closed".to_string()
                 };
+                Ok(None)
+            }
+            TuiAction::NextGraphFilter => {
+                self.cycle_graph_filter(1, snapshot);
+                Ok(None)
+            }
+            TuiAction::PreviousGraphFilter => {
+                self.cycle_graph_filter(-1, snapshot);
                 Ok(None)
             }
             TuiAction::EnterCommandMode => {
@@ -3036,13 +3047,17 @@ impl TuiShellState {
                 self.apply_action(TuiAction::ActivateSelection, snapshot)?;
             }
             KeyCode::Backspace | KeyCode::Char('[') => {
-                if let Err(err) = self.apply_action(TuiAction::Back, snapshot) {
+                if self.active_lens == NavigationLens::LocalGraph {
+                    self.apply_action(TuiAction::PreviousGraphFilter, snapshot)?;
+                } else if let Err(err) = self.apply_action(TuiAction::Back, snapshot) {
                     self.status_line = err.message.clone();
                     self.last_error = Some(err);
                 }
             }
             KeyCode::Char(']') => {
-                if let Err(err) = self.apply_action(TuiAction::Forward, snapshot) {
+                if self.active_lens == NavigationLens::LocalGraph {
+                    self.apply_action(TuiAction::NextGraphFilter, snapshot)?;
+                } else if let Err(err) = self.apply_action(TuiAction::Forward, snapshot) {
                     self.status_line = err.message.clone();
                     self.last_error = Some(err);
                 }
@@ -3257,7 +3272,7 @@ impl TuiShellState {
             };
         } else if self.active_lens == NavigationLens::LocalGraph {
             if let Some(selected) = self.selected.as_ref() {
-                let len = graph_row_count(snapshot, selected);
+                let len = graph_row_count(self, snapshot, selected);
                 self.main_cursor = if len == 0 {
                     0
                 } else {
@@ -3314,6 +3329,25 @@ impl TuiShellState {
             self.inspector_scroll = 0;
         }
         self.status_line = format!("focus {}", pane_focus_label(focus));
+    }
+
+    fn cycle_graph_filter(&mut self, delta: isize, snapshot: &WorkspaceSnapshot) {
+        let filters = RelationFilter::all();
+        let current = filters
+            .iter()
+            .position(|filter| *filter == self.graph_filter)
+            .unwrap_or(0) as isize;
+        let next = (current + delta).rem_euclid(filters.len() as isize) as usize;
+        self.graph_filter = filters[next];
+        self.main_cursor = 0;
+        self.inspector_cursor = 0;
+        self.inspector_scroll = 0;
+        self.clamp_cursors(snapshot);
+        self.status_line = format!(
+            "graph filter {} ({})",
+            self.graph_filter.id(),
+            self.graph_filter.label()
+        );
     }
 
     fn move_active_cursor(&mut self, snapshot: &WorkspaceSnapshot, delta: isize) {
@@ -3373,7 +3407,7 @@ impl TuiShellState {
                 self.inspector_scroll = 0;
                 return;
             };
-            let len = graph_row_count(snapshot, selected) as isize;
+            let len = graph_row_count(self, snapshot, selected) as isize;
             if len == 0 {
                 self.main_cursor = 0;
             } else {
@@ -3426,7 +3460,7 @@ impl TuiShellState {
     fn sync_selection_from_cursor(&mut self, snapshot: &WorkspaceSnapshot) {
         if self.active_lens == NavigationLens::LocalGraph && self.selected.is_some() {
             if let Some(selected) = self.selected.as_ref() {
-                let len = graph_row_count(snapshot, selected);
+                let len = graph_row_count(self, snapshot, selected);
                 if len == 0 {
                     self.main_cursor = 0;
                 } else if self.main_cursor >= len {
@@ -5014,17 +5048,22 @@ fn render_local_graph(
     if let Some(selected) = &app.selected {
         if let Some(model) = snapshot.local_graph_model(
             selected,
-            GRAPH_LAB_ACTIVE_FILTER,
+            app.graph_filter,
             GRAPH_LAB_MAX_DEPTH,
             GRAPH_LAB_MAX_NODES,
         ) {
             let traversal = snapshot.local_graph_traversal(
                 selected,
-                GRAPH_LAB_ACTIVE_FILTER,
+                app.graph_filter,
                 GRAPH_LAB_MAX_DEPTH,
                 GRAPH_LAB_MAX_NODES,
             );
             lines.push(Line::from(format!("Root: {}", model.root_label)));
+            lines.push(Line::from(format!(
+                "active filter: {} ({})  keys: [ previous, ] next",
+                model.active_filter.id(),
+                model.active_filter.label()
+            )));
             let filters = model
                 .relation_filters
                 .iter()
@@ -6366,17 +6405,17 @@ fn graph_model_for_app(
     let root = app.selected.as_ref()?;
     snapshot.local_graph_model(
         root,
-        GRAPH_LAB_ACTIVE_FILTER,
+        app.graph_filter,
         GRAPH_LAB_MAX_DEPTH,
         GRAPH_LAB_MAX_NODES,
     )
 }
 
-fn graph_row_count(snapshot: &WorkspaceSnapshot, root: &ObjectRef) -> usize {
+fn graph_row_count(app: &TuiShellState, snapshot: &WorkspaceSnapshot, root: &ObjectRef) -> usize {
     snapshot
         .local_graph_model(
             root,
-            GRAPH_LAB_ACTIVE_FILTER,
+            app.graph_filter,
             GRAPH_LAB_MAX_DEPTH,
             GRAPH_LAB_MAX_NODES,
         )
@@ -6658,24 +6697,11 @@ fn lens_help(lens: NavigationLens) -> &'static str {
     lens.help()
 }
 
-fn focus_help(focus: PaneFocus) -> &'static str {
-    match focus {
-        PaneFocus::Workspace => "Up/Down switches lenses; Enter moves into Main View",
-        PaneFocus::Main => "Up/Down moves rows; Enter opens selected object",
-        PaneFocus::Inspector => "Up/Down selects evidence or relations; Enter jumps",
-    }
-}
-
 fn lens_next_step(lens: NavigationLens) -> &'static str {
     lens.next_step()
 }
 
 fn help_overlay_lines(app: &TuiShellState, snapshot: &WorkspaceSnapshot) -> Vec<Line<'static>> {
-    let selected = app
-        .selected
-        .as_ref()
-        .map(|object_ref| snapshot.object_label(object_ref))
-        .unwrap_or_else(|| "none".to_string());
     let analysis_status = snapshot
         .overview
         .analysis_status
@@ -6699,32 +6725,24 @@ fn help_overlay_lines(app: &TuiShellState, snapshot: &WorkspaceSnapshot) -> Vec<
             lens_label(app.active_lens),
             lens_help(app.active_lens)
         )),
-        Line::from(format!(
-            "Focus: {} - {}",
-            pane_focus_label(app.focus),
-            focus_help(app.focus)
-        )),
-        Line::from(format!("Selected: {}", truncate(&selected, 72))),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Navigation",
             Style::default().add_modifier(Modifier::BOLD),
         )]),
-        Line::from("Tab/Shift+Tab panes; Left/Right columns; Up/Down or j/k moves; Enter opens or jumps."),
-        Line::from("Lenses: g triage, x hex, G graph, D diff, T trace, W firmware, C crash, P protocol, J jobs, o overview, b binary, r radar, f functions, s strings, i imports, n notes, F findings."),
-        Line::from("History: [ back, ] forward. Commands: p deck, : command mode. Quit: q or Esc outside help."),
+        Line::from("Tab panes; arrows/j/k move; Enter opens. Lenses: g triage, G graph, D diff, T trace, W firmware, C crash, P protocol, J jobs."),
+        Line::from("History: [ back, ] forward. Commands: p deck, : command mode. Quit: q or Esc."),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Commands",
             Style::default().add_modifier(Modifier::BOLD),
         )]),
-        Line::from(":find string password    :find import system    :xrefs current    :open current"),
+        Line::from(":find string password    :find import system    :find function main    :xrefs current"),
+        Line::from("Shell parity: revdeck search / inspect / xrefs / disasm; G graph, [/] filters."),
         Line::from(":tag current suspicious  :note current reviewed path  :rename current name  :status current reviewed"),
-        Line::from(":finding new high title  :finding link <finding> current evidence"),
-        Line::from(":export markdown report.md  :export json report.json"),
+        Line::from(":finding new high title   :finding link <finding> current evidence   :export json report.json"),
         Line::from(r#":hex-search window reports file + window offsets; :hex-find full file scan"#),
         Line::from(r#"Hex text escapes: \\ \" \' \n \r \t \0 \xNN"#),
-        Line::from("Fast open: analyze enters the TUI immediately; use J Jobs or x Hex while analysis runs."),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Current next step",
@@ -6755,22 +6773,16 @@ fn command_deck_lines(app: &TuiShellState, snapshot: &WorkspaceSnapshot) -> Vec<
                 .add_modifier(Modifier::BOLD),
         )]),
         Line::from(":open current              navigate to selected object"),
-        Line::from(":xrefs current             load local relations into Graph Lab"),
-        Line::from(":find string <term>        search strings"),
-        Line::from(":find import <term>        search imports"),
-        Line::from("x / H                       open read-only Hex Viewer"),
-        Line::from(":hex 0x200                 jump Hex Viewer to offset"),
+        Line::from(":xrefs current / depth 2   load Graph Lab relations and bounded paths"),
+        Line::from(":find string/import/function <term>  shell: revdeck search --kind <kind>"),
+        Line::from("Shell: revdeck inspect/xrefs/disasm/sections/imports/strings"),
+        Line::from("Graph: G graph [/] filters"),
         Line::from(":hex current/selected or :hex-current jump selected offset"),
         Line::from(":hex-search / :bytes-search find bytes or text in current Hex window"),
         Line::from("                            status shows file offset and window +0x offset"),
         Line::from(":hex-find / :bytes-find scan full file bytes; e.g. `0xde 0xad`"),
         Line::from(r#"Hex text escapes: \\ \" \' \n \r \t \0 \xNN"#),
-        Line::from(":hex-bookmark current <tag> mark selected byte row"),
-        Line::from(":hex-note current <text>   persist byte note"),
-        Line::from("J                           inspect background analysis jobs"),
-        Line::from(":tag current <tag>         add analysis memory"),
-        Line::from(":note current <text>       add analyst note"),
-        Line::from(":finding new high <title>  create finding draft"),
+        Line::from("J jobs; :tag current <tag>; :note current <text>; :finding new high <title>"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Current Object",
@@ -6780,14 +6792,8 @@ fn command_deck_lines(app: &TuiShellState, snapshot: &WorkspaceSnapshot) -> Vec<
         )]),
         Line::from(format!("selected: {}", truncate(&selected, 64))),
         Line::from(format!("ref: {selected_ref}")),
-        Line::from("preview: G opens Graph Lab, D opens Diff Lab, T opens Trace Lab, W opens Firmware Lab, C opens Crash Lab, P opens Protocol Lab, Enter opens, :xrefs current loads relations"),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Recent / Context",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
         Line::from(format!(
-            "view={} focus={} exports={} findings={} session-tags={}",
+            "view={} focus={} exports={} findings={} tags={}",
             lens_label(app.active_lens),
             pane_focus_label(app.focus),
             app.command_state.export_requests.len(),

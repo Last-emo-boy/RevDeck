@@ -1,7 +1,7 @@
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::BTreeSet;
 
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 
 pub const MIGRATION_0001: &str = include_str!("../migrations/0001_foundation.sql");
 pub const MIGRATION_0002: &str = include_str!("../migrations/0002_binary_index.sql");
@@ -15,6 +15,7 @@ pub const MIGRATION_0009: &str = include_str!("../migrations/0009_trace_lab.sql"
 pub const MIGRATION_0010: &str = include_str!("../migrations/0010_firmware_lab.sql");
 pub const MIGRATION_0011: &str = include_str!("../migrations/0011_crash_lab.sql");
 pub const MIGRATION_0012: &str = include_str!("../migrations/0012_protocol_lab.sql");
+pub const MIGRATION_0013: &str = include_str!("../migrations/0013_project_case_notes.sql");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Migration {
@@ -83,6 +84,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 12,
         name: "protocol_lab",
         sql: MIGRATION_0012,
+    },
+    Migration {
+        version: 13,
+        name: "project_case_notes",
+        sql: MIGRATION_0013,
     },
 ];
 
@@ -180,6 +186,8 @@ mod tests {
             "protocol_samples",
             "protocol_messages",
             "protocol_fields",
+            "project_metadata",
+            "project_notes",
         ] {
             assert!(table_names.contains(table), "missing table {table}");
         }

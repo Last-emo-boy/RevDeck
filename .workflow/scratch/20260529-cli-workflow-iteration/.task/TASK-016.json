@@ -1,0 +1,33 @@
+{
+  "id": "TASK-016",
+  "title": "Plugin SDK command scaffolding",
+  "status": "completed",
+  "purpose": "Reduce plugin authoring friction by adding a first-party scaffold command and clearer local fixture replay workflow.",
+  "read_first": [
+    "crates/revdeck-cli/src/main.rs",
+    "crates/revdeck-plugin-host/src/lib.rs",
+    "crates/revdeck-plugin-sdk/src",
+    "tests/plugin-sdk/tests/plugin_sdk.rs"
+  ],
+  "files": [
+    "crates/revdeck-cli/src/main.rs",
+    "crates/revdeck-plugin-host/src/lib.rs",
+    "tests/plugin-sdk/tests/plugin_sdk.rs",
+    "README.md"
+  ],
+  "actions": [
+    "Add revdeck plugin scaffold <dir> --id <id>",
+    "Generate minimal manifest and fixture replay structure",
+    "Document validate, inspect, test, run, commit flow",
+    "Add tests for scaffolded plugin validation"
+  ],
+  "convergence": {
+    "criteria": [
+      "Scaffold command never overwrites existing plugin files without explicit force",
+      "Generated plugin passes validate/test",
+      "Docs include exact command sequence",
+      "No public marketplace assumptions are introduced"
+    ]
+  },
+  "summary": "Added plugin scaffold command/API with overwrite protection, generated manifest/ObjectBatch, docs, and validation tests."
+}

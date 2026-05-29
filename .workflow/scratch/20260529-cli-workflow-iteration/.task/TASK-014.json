@@ -1,0 +1,34 @@
+{
+  "id": "TASK-014",
+  "title": "Trace and crash correlation depth",
+  "status": "completed",
+  "purpose": "Improve dynamic-evidence importers so trace events and crash frames link back to static functions with transparent confidence metadata.",
+  "read_first": [
+    "crates/revdeck-db/src/repo.rs",
+    "tests/trace/tests/trace_lab.rs",
+    "tests/crash/tests/crash_lab.rs",
+    "crates/revdeck-tui/src/lib.rs"
+  ],
+  "files": [
+    "crates/revdeck-db/src/repo.rs",
+    "crates/revdeck-core/src/view_models/mod.rs",
+    "crates/revdeck-tui/src/lib.rs",
+    "tests/trace/tests/trace_lab.rs",
+    "tests/crash/tests/crash_lab.rs"
+  ],
+  "actions": [
+    "Add confidence metadata for address/name-based correlation",
+    "Expose uncorrelated event/frame diagnostics",
+    "Render related static function refs in TUI Inspector",
+    "Add JSON status fields for correlation quality"
+  ],
+  "convergence": {
+    "criteria": [
+      "Current trace/crash importer tests continue to pass",
+      "Correlated and uncorrelated records are both represented",
+      "High-risk crash finding creation remains conservative",
+      "Status JSON includes correlation counts and confidence classes"
+    ]
+  },
+  "summary": "Added trace/crash correlation quality metadata, confidence summaries, uncorrelated counts, and status JSON details."
+}

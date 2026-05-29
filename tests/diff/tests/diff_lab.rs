@@ -354,6 +354,9 @@ fn diff_lab_persists_exact_object_and_relation_deltas() {
         .any(|object| object.kind == ObjectKind::Finding));
 
     let summary = DiffSummaryViewModel::compare(&before_snapshot, &after_snapshot);
+    assert!(summary.risk_summary.high_risk_rows > 0);
+    assert!(summary.risk_summary.dangerous_import_deltas > 0);
+    assert!(summary.risk_summary.sensitive_string_deltas > 0);
     assert!(summary.rows.iter().any(|row| {
         row.entity_kind == DiffEntityKind::Object
             && row.change == DiffChangeKind::Changed
@@ -421,11 +424,32 @@ fn diff_lab_persists_exact_object_and_relation_deltas() {
     assert!(json["summary"]["added"].as_u64().unwrap() > 0);
     assert!(json["summary"]["removed"].as_u64().unwrap() > 0);
     assert!(json["summary"]["changed"].as_u64().unwrap() > 0);
+    assert!(json["summary"]["risk"]["high_risk_rows"].as_u64().unwrap() > 0);
+    assert!(
+        json["summary"]["risk"]["dangerous_import_deltas"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
     assert!(json["rows"]
         .as_array()
         .unwrap()
         .iter()
         .any(|row| { row["entity_kind"] == "relation" && row["change"] == "changed" }));
+    assert!(json["rows"].as_array().unwrap().iter().any(|row| {
+        row["risk_level"] == "high"
+            && row["risk_reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| {
+                    reason
+                        .as_str()
+                        .unwrap_or_default()
+                        .starts_with("dangerous_import:")
+                })
+            && (row["before_ref"].is_string() || row["after_ref"].is_string())
+    }));
 
     let persisted_after_cli: i64 = project
         .connection()
@@ -439,4 +463,16 @@ fn diff_lab_persists_exact_object_and_relation_deltas() {
         )
         .unwrap();
     assert_eq!(persisted_after_cli, summary.total_deltas() as i64);
+    let persisted_risky_deltas: i64 = project
+        .connection()
+        .query_row(
+            "SELECT COUNT(*)
+            FROM objects
+            WHERE kind = 'diff_delta'
+              AND metadata_json LIKE '%\"risk_level\":\"high\"%'",
+            params![],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(persisted_risky_deltas > 0);
 }

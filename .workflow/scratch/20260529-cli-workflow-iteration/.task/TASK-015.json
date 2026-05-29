@@ -1,0 +1,34 @@
+{
+  "id": "TASK-015",
+  "title": "Protocol and firmware evidence pivots",
+  "status": "completed",
+  "purpose": "Make Protocol and Firmware Labs more useful as evidence sources by improving pivots from fields/files to artifacts, strings, and findings.",
+  "read_first": [
+    "crates/revdeck-db/src/repo.rs",
+    "tests/protocol/tests/protocol_lab.rs",
+    "tests/firmware/tests/firmware_lab.rs",
+    "crates/revdeck-tui/src/lib.rs"
+  ],
+  "files": [
+    "crates/revdeck-db/src/repo.rs",
+    "crates/revdeck-core/src/view_models/mod.rs",
+    "crates/revdeck-tui/src/lib.rs",
+    "tests/protocol/tests/protocol_lab.rs",
+    "tests/firmware/tests/firmware_lab.rs"
+  ],
+  "actions": [
+    "Add nested artifact summary for firmware file inspection",
+    "Add protocol field pivots to string hints and binary offsets",
+    "Expose relation-backed Inspector rows",
+    "Improve status JSON for firmware/protocol commands"
+  ],
+  "convergence": {
+    "criteria": [
+      "Existing Firmware and Protocol Lab tests continue to pass",
+      "String hint correlation remains visible",
+      "Nested artifact links are safe when missing",
+      "Inspector rows can jump to related objects"
+    ]
+  },
+  "summary": "Added protocol field pivots, firmware nested artifact summaries, and richer status JSON pivots."
+}

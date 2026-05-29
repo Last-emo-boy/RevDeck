@@ -11,8 +11,9 @@ pub use repo::{
     CrashImportOutcome, CrashReportRecord, CrashRepository, FindingRepository, FirmwareFileRecord,
     FirmwareImportOutcome, FirmwareRepository, FunctionRecord, ImportRecord, IndexRepository,
     InstructionRecord, MemoryRepository, NewAnalysisJob, NewPluginRun, ObjectRepository,
-    PluginRunRecord, PluginRunRepository, ProtocolFieldRecord, ProtocolImportOutcome,
-    ProtocolMessageRecord, ProtocolRepository, ProtocolSampleRecord, RadarRepository,
-    SectionRecord, StoredEdge, StoredObject, StringRecord, SymbolRecord, TraceEventRecord,
-    TraceImportOutcome, TraceRepository, TraceSessionRecord, XrefRecord,
+    PluginRunRecord, PluginRunRepository, ProjectMetadataRecord, ProjectMetadataRepository,
+    ProjectNoteRecord, ProtocolFieldRecord, ProtocolImportOutcome, ProtocolMessageRecord,
+    ProtocolRepository, ProtocolSampleRecord, RadarRepository, SectionRecord, StoredEdge,
+    StoredObject, StringRecord, SymbolRecord, TraceEventRecord, TraceImportOutcome,
+    TraceRepository, TraceSessionRecord, XrefRecord,
 };

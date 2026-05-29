@@ -64,6 +64,17 @@ pub struct PluginRunOutput {
     pub validation: ValidationReport,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginScaffoldOutput {
+    pub status: &'static str,
+    pub plugin_dir: String,
+    pub manifest_path: String,
+    pub object_batch_path: String,
+    pub plugin_id: String,
+    pub files_written: Vec<String>,
+    pub validation: ValidationReport,
+}
+
 struct LoadedPluginDirectory {
     manifest: PluginManifest,
     manifest_digest: String,
@@ -80,6 +91,56 @@ pub fn validate_manifest_file(path: &Path) -> Result<ManifestValidationOutput> {
 
 pub fn inspect_manifest_file(path: &Path) -> Result<ManifestValidationOutput> {
     validate_manifest_file(path)
+}
+
+pub fn scaffold_plugin_directory(
+    path: &Path,
+    plugin_id: &str,
+    force: bool,
+) -> Result<PluginScaffoldOutput> {
+    validate_scaffold_plugin_id(plugin_id)?;
+    let manifest_path = path.join("revdeck-plugin.toml");
+    let object_batch_path = path.join("object-batch.json");
+    let mut collisions = Vec::new();
+    if manifest_path.exists() {
+        collisions.push(manifest_path.display().to_string());
+    }
+    if object_batch_path.exists() {
+        collisions.push(object_batch_path.display().to_string());
+    }
+    if !collisions.is_empty() && !force {
+        anyhow::bail!(
+            "plugin scaffold would overwrite existing files: {}",
+            collisions.join(", ")
+        );
+    }
+
+    fs::create_dir_all(path)
+        .with_context(|| format!("failed to create plugin directory {}", path.display()))?;
+    let manifest = scaffold_manifest(plugin_id);
+    let batch = scaffold_object_batch(plugin_id);
+    fs::write(&manifest_path, manifest)
+        .with_context(|| format!("failed to write {}", manifest_path.display()))?;
+    fs::write(&object_batch_path, batch)
+        .with_context(|| format!("failed to write {}", object_batch_path.display()))?;
+
+    let validation = test_plugin_directory(path)?.validation;
+    Ok(PluginScaffoldOutput {
+        status: if validation.is_valid() {
+            "scaffolded"
+        } else {
+            "failed"
+        },
+        plugin_dir: path.display().to_string(),
+        manifest_path: manifest_path.display().to_string(),
+        object_batch_path: object_batch_path.display().to_string(),
+        plugin_id: plugin_id.to_string(),
+        files_written: vec![
+            manifest_path.display().to_string(),
+            object_batch_path.display().to_string(),
+        ],
+        validation,
+    })
 }
 
 pub fn validate_manifest_str(input: &str) -> Result<ManifestValidationOutput> {
@@ -199,6 +260,106 @@ fn load_plugin_directory(path: &Path) -> Result<LoadedPluginDirectory> {
         batch_digest,
         validation,
     })
+}
+
+fn validate_scaffold_plugin_id(plugin_id: &str) -> Result<()> {
+    let valid = !plugin_id.trim().is_empty()
+        && plugin_id
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '.' || ch == '-');
+    if valid {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "plugin id must contain only lowercase ASCII letters, digits, dots, or hyphens"
+        )
+    }
+}
+
+fn scaffold_manifest(plugin_id: &str) -> String {
+    let name = plugin_id
+        .rsplit(['.', '-'])
+        .next()
+        .filter(|value| !value.is_empty())
+        .unwrap_or(plugin_id);
+    format!(
+        r#"[plugin]
+id = "{plugin_id}"
+name = "{name} Plugin"
+version = "0.1.0"
+sdk_version = "0.1.0"
+revdeck_compat = ">=0.1,<0.3"
+
+[[capabilities]]
+id = "fixture-replay"
+kind = "adapter"
+inputs = ["json"]
+outputs = ["object_batch"]
+
+[[capabilities]]
+id = "report-contributor"
+kind = "report_contributor"
+inputs = ["object_batch"]
+outputs = ["finding_context"]
+
+[permissions]
+artifact_read = ["external_export"]
+project_write = ["objects", "edges", "attributes", "diagnostics"]
+lab_write = ["plugin"]
+network = false
+process_spawn = false
+secrets = false
+environment = false
+
+[ui]
+commands = ["{plugin_id}.replay"]
+inspector_cards = ["{plugin_id}.provenance"]
+"#
+    )
+}
+
+fn scaffold_object_batch(plugin_id: &str) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "provenance": {
+            "plugin_id": plugin_id,
+            "plugin_version": "0.1.0",
+            "input_digest": "sha256:scaffold"
+        },
+        "objects": [
+            {
+                "object_ref": {
+                    "kind": "plugin_contribution",
+                    "key": format!("plugin_contribution/lab=plugin/id={plugin_id}/scaffold-report-context")
+                },
+                "display_name": format!("{plugin_id} scaffold report context"),
+                "metadata": {
+                    "summary": "Scaffolded Plugin Lab fixture output.",
+                    "capability": "report-contributor"
+                }
+            }
+        ],
+        "edges": [],
+        "attributes": [
+            {
+                "subject": {
+                    "kind": "plugin_contribution",
+                    "key": format!("plugin_contribution/lab=plugin/id={plugin_id}/scaffold-report-context")
+                },
+                "namespace": plugin_id,
+                "schema_id": "plugin-contribution.v1",
+                "key": "fixture",
+                "value": true
+            }
+        ],
+        "diagnostics": [
+            {
+                "severity": "info",
+                "code": "scaffold_fixture",
+                "message": "Scaffolded plugin fixture replay is ready for revdeck plugin test."
+            }
+        ]
+    }))
+    .expect("scaffold object batch JSON is serializable")
 }
 
 fn commit_loaded_plugin(

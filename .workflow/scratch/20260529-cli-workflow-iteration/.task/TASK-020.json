@@ -1,0 +1,34 @@
+{
+  "id": "TASK-020",
+  "title": "Regression suite for Windows PE samples",
+  "status": "completed",
+  "purpose": "Add stable regression coverage for Windows PE workflows such as Notepad analysis without depending on a machine-specific system binary.",
+  "read_first": [
+    "fixtures/manifest.json",
+    "crates/revdeck-index/src/lib.rs",
+    "tests/tui/tests/tui_workspace.rs",
+    "tests/commands/tests/command_pipeline.rs"
+  ],
+  "files": [
+    "fixtures/manifest.json",
+    "fixtures/binaries",
+    "tests/commands/tests/command_pipeline.rs",
+    "tests/tui/tests/tui_workspace.rs",
+    "README.md"
+  ],
+  "actions": [
+    "Define a fixture strategy for small committed PE samples or generated synthetic PE fixtures",
+    "Add tests for imports, strings, sections, search, inspect, and hex workflows",
+    "Avoid depending on C:\\Windows\\System32\\notepad.exe in CI",
+    "Document how users can run the same workflow on local Notepad"
+  ],
+  "convergence": {
+    "criteria": [
+      "Tests are deterministic on Windows and non-Windows hosts",
+      "No proprietary system binary is committed",
+      "Notepad workflow docs remain accurate",
+      "Command and TUI tests cover PE-specific paths"
+    ]
+  },
+  "summary": "Added runtime synthetic PE command regression coverage, fixture manifest strategy, and Notepad workflow docs."
+}

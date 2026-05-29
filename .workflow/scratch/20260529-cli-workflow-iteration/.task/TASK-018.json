@@ -1,0 +1,34 @@
+{
+  "id": "TASK-018",
+  "title": "Project metadata and case notes",
+  "status": "completed",
+  "purpose": "Support analyst handoff by storing project-level target metadata, assumptions, notes, and summary decisions.",
+  "read_first": [
+    "crates/revdeck-db/src/migrations.rs",
+    "crates/revdeck-db/src/repo.rs",
+    "crates/revdeck-cli/src/main.rs",
+    "crates/revdeck-tui/src/lib.rs"
+  ],
+  "files": [
+    "crates/revdeck-db/migrations",
+    "crates/revdeck-db/src/migrations.rs",
+    "crates/revdeck-db/src/repo.rs",
+    "crates/revdeck-cli/src/main.rs",
+    "tests/foundation/tests/foundation.rs"
+  ],
+  "actions": [
+    "Add project metadata storage if no suitable table exists",
+    "Add CLI commands for get/set/list project notes and metadata",
+    "Expose project notes in Overview/Report Lab",
+    "Add migration and repository tests"
+  ],
+  "convergence": {
+    "criteria": [
+      "Schema migration is forward-only",
+      "Project metadata survives reopen",
+      "Report export includes case metadata",
+      "CLI prevents empty metadata keys"
+    ]
+  },
+  "summary": "Added project metadata/notes migration, repository, CLI commands, and export context integration."
+}

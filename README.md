@@ -144,9 +144,92 @@ revdeck jobs .\case-001
 revdeck jobs .\case-001 --limit 20
 ```
 
+### `revdeck search <project_dir> <query>`
+
+在不打开 TUI 的情况下搜索项目对象。适合对 Notepad 这类目标快速查 imports、strings、functions、sections 或 findings，再回到 TUI 继续查看关系和证据。
+
+```powershell
+revdeck search .\case-001 system --kind import
+revdeck search .\case-001 password --kind string --limit 10
+revdeck search .\case-001 CreateFile --json
+```
+
+`--kind` 接受 RevDeck 对象类型，例如 `function`、`string`、`import`、`section`、`finding`、`trace_event`、`crash_frame`、`protocol_field`。省略 `--kind` 时会跨对象类型搜索。
+
+### `revdeck inspect <project_dir> <object-ref>`
+
+查看单个对象的基础信息、metadata 和关系摘要。通常先用 `revdeck search --json` 拿到 `ref`，再用 inspect 做命令行深挖。
+
+```powershell
+revdeck inspect .\case-001 "import:import/artifact=.../symbol=CreateFileW"
+revdeck inspect .\case-001 "<object-ref>" --relations 50 --json
+```
+
+### `revdeck xrefs <project_dir> <object-ref>`
+
+从命令行查看对象关系。适合先用 `search` 找到 import/string/function，再看谁引用它，或者用 `--depth` 做 bounded 局部遍历。
+
+```powershell
+revdeck xrefs .\case-001 "<object-ref>" --direction incoming
+revdeck xrefs .\case-001 "<object-ref>" --edge-kind calls-import --json
+revdeck xrefs .\case-001 "<object-ref>" --depth 2 --limit 64 --json
+```
+
+`--direction` 支持 `incoming`、`outgoing`、`both`；`--edge-kind` 使用 RevDeck edge 名称，例如 `calls_import` / `calls-import`、`references`、`contains`、`correlates`。
+
+### `revdeck disasm <project_dir> <function-ref>`
+
+查看函数的 basic block 和 instruction 预览。这个命令只做 bounded preview，不替代完整反汇编器；它用于确认 native CFG pass 已经索引到哪些低层证据。
+
+```powershell
+revdeck disasm .\case-001 "<function-ref>" --limit 40
+revdeck disasm .\case-001 "<function-ref>" --limit 40 --json
+```
+
+`--limit` 同时限制 basic block 行和 instruction 行。`quick` profile 会主动跳过 native CFG，因此此命令会输出 `CFG unavailable` 或 JSON 中的 `available=false`。
+
+### `revdeck sections <project_dir>`
+
+列出已索引 section 布局，包含 VA、file offset、size、flags、entropy 和 object ref。
+
+```powershell
+revdeck sections .\case-001
+revdeck sections .\case-001 --artifact <artifact-ref> --json
+```
+
+### `revdeck imports <project_dir>` / `revdeck strings <project_dir>`
+
+快速列出 imports 和 strings，不需要进入 TUI。适合 Notepad 这类 PE 目标的第一轮摸底。
+
+```powershell
+revdeck imports .\case-001 --module USER32 --limit 50
+revdeck imports .\case-001 --json
+revdeck strings .\case-001 --contains password --min-len 4 --json
+revdeck strings .\case-001 --limit 100
+```
+
+`imports` 输出会附带 `family`，用于粗分 process、filesystem、registry、network、crypto、memory、loader、ui、libc 和 uncategorized。`strings` 输出会附带 `signal`，用于粗分 url、file_path、registry_key、command、credential、format_string、ui_text、debug、noise 和 other。`inspect` 函数对象时也会输出 function packet，汇总 score reasons、相关 imports、相关 strings 和 outgoing relation 数。
+
+Function Radar 还会给常见 runtime / compiler boilerplate 输出 `known_library_baseline` reason，用于降低 `_start`、`__libc_start_main`、GCC/CRT helper 和普通 runtime import cluster 的 triage 优先级。这是 RevDeck 的 first-party 降噪 baseline，不是 IDA FLIRT 或完整库签名匹配；危险 import 和敏感 string 仍然保留正向风险分。
+
+### Windows PE / Notepad workflow
+
+CI 中的 PE 回归使用运行时生成的 synthetic PE fixture，不提交 `C:\Windows\System32\notepad.exe` 或其他系统二进制。用户在本机可以用同一套命令分析 Notepad：
+
+```powershell
+revdeck init .\notepad-case
+revdeck import .\notepad-case C:\Windows\System32\notepad.exe
+revdeck search .\notepad-case CreateFile --kind import --json
+revdeck imports .\notepad-case --module KERNEL32 --json
+revdeck strings .\notepad-case --contains notepad --json
+revdeck sections .\notepad-case --json
+```
+
+测试 fixture 只验证 PE sections、IAT import、strings、search 和 inspect 的命令路径；本机 Notepad 的具体 imports/strings 会随 Windows 版本变化。
+
 ### `revdeck trace`
 
-导入 JSONL trace，并把 session、event timeline 和可匹配函数写入项目图。
+导入 JSONL trace，并把 session、event timeline 和可匹配函数写入项目图。`status --json` 会输出 correlation quality，包括 correlated / uncorrelated 计数、confidence 分布、每个 event 的 `correlation_method` 和 `correlation_confidence`。
 
 ```powershell
 revdeck trace import .\case-001 .\fixtures\traces\minimal.jsonl --artifact <artifact-ref> --json
@@ -155,7 +238,7 @@ revdeck trace status .\case-001 --artifact <artifact-ref> --limit 20 --json
 
 ### `revdeck firmware`
 
-导入固件目录 inventory，记录路径、hash、文件类型、嵌套 ELF/PE artifact 占位和 path evidence。
+导入固件目录 inventory，记录路径、hash、文件类型、嵌套 ELF/PE artifact 占位和 path evidence。`status --json` 会输出 nested artifact summary 和 pivot 命令，方便从固件文件跳到嵌套 binary artifact。
 
 ```powershell
 revdeck firmware import .\case-001 .\fixtures\firmware\router-root --json
@@ -164,7 +247,7 @@ revdeck firmware status .\case-001 <firmware-artifact-ref> --limit 200 --json
 
 ### `revdeck crash`
 
-导入 crash fixture、sanitizer 输出或泛化 stack trace，规范化 crash report / frame，按 sanitizer class、signal 和调用栈前缀生成 signature，并为高风险 crash class 生成 finding 建议。
+导入 crash fixture、sanitizer 输出或泛化 stack trace，规范化 crash report / frame，按 sanitizer class、signal 和调用栈前缀生成 signature，并为高风险 crash class 生成 finding 建议。`status --json` 会输出 frame correlation quality、uncorrelated frame 和 confidence 分布。
 
 ```powershell
 revdeck crash import .\case-001 .\fixtures\crashes\asan_uaf.json --artifact <artifact-ref> --json
@@ -173,7 +256,7 @@ revdeck crash status .\case-001 --artifact <artifact-ref> --limit 20 --json
 
 ### `revdeck protocol`
 
-导入 bounded 协议样本 JSON，把 sample、message 和 field 写入项目图，记录 payload、schema hypothesis、字段信号，并把 `string_hint` 关联到已索引的 binary string。
+导入 bounded 协议样本 JSON，把 sample、message 和 field 写入项目图，记录 payload、schema hypothesis、字段信号，并把 `string_hint` 关联到已索引的 binary string。`status --json` 会输出 field byte range、string hint pivot 和 correlated string ref。
 
 ```powershell
 revdeck protocol import .\case-001 .\fixtures\protocol\login_handshake.json --artifact <artifact-ref> --json
@@ -228,6 +311,8 @@ revdeck stats .\case-001
 ```powershell
 revdeck report .\case-001 --format json --out report.json
 revdeck report .\case-001 --format md --out report.md
+revdeck report .\case-001 --format json --template summary
+revdeck report .\case-001 --format json --template ci --min-lab-coverage 2
 ```
 
 `--format json` 输出 machine-readable release bundle，包含：
@@ -240,6 +325,31 @@ revdeck report .\case-001 --format md --out report.md
 - `validation`：release gate 的 errors 和 warnings。
 
 `--format md` 输出人工审阅报告，包含 `Lab Coverage` 段落和每个 finding 的 evidence 列表。如果没有 `--out`，报告会直接输出到终端。
+
+`--template` 支持 `summary`、`full` 和 `ci`。`full` 是完整 JSON bundle；`summary` 输出 finding/lab/gate 概览；`ci` 输出 release gate payload，并在 validation error 或 `--min-lab-coverage` 未达标时返回非零。
+
+### `revdeck case`
+
+记录项目级 metadata 和 analyst notes，用于 handoff 与报告导出。
+
+```powershell
+revdeck case metadata set .\case-001 target.name notepad.exe
+revdeck case metadata list .\case-001 --json
+revdeck case note add .\case-001 "Local sample" "Used local Notepad-like fixture" --category assumption
+revdeck case note list .\case-001 --json
+```
+
+metadata key 不能为空，也不能包含空白字符。Report bundle 会包含 `case_metadata` 和 `case_notes`。
+
+### `revdeck bundle export`
+
+导出可迁移的 case bundle manifest、项目数据库副本和 report bundle。它不会复制 `target` build output，也不会隐式包含本机外部 source binary。
+
+```powershell
+revdeck bundle export .\case-001 --out .\case-001-bundle
+```
+
+输出目录包含 `revdeck-bundle-manifest.json`、`project.sqlite` 和 `report.json`。manifest 记录 schema version、artifact identity、analysis profile/job 摘要和 plugin provenance。
 
 ### `revdeck index <project_dir> [artifact_id]`
 
@@ -617,6 +727,7 @@ RevDeck 现在有一个本地 plugin SDK preview 的基础骨架。它不是 mar
 
 当前支持：
 
+- `revdeck plugin scaffold <plugin_dir> --id <id>`：生成本地插件 manifest 和 fixture replay ObjectBatch。
 - `revdeck plugin validate <revdeck-plugin.toml>`：校验插件 manifest。
 - `revdeck plugin inspect <revdeck-plugin.toml>`：输出插件能力、权限和校验结果。
 - `revdeck plugin test <plugin_dir>`：校验 manifest，并在存在 `object-batch.json` 时执行 ObjectBatch dry-run。
@@ -630,6 +741,18 @@ my-plugin/
   revdeck-plugin.toml
   object-batch.json
 ```
+
+推荐从 scaffold 开始：
+
+```powershell
+revdeck plugin scaffold .\my-plugin --id com.example.my-plugin
+revdeck plugin validate .\my-plugin\revdeck-plugin.toml
+revdeck plugin inspect .\my-plugin\revdeck-plugin.toml
+revdeck plugin test .\my-plugin
+revdeck plugin run .\case-001 .\my-plugin --commit
+```
+
+scaffold 默认不会覆盖已有 `revdeck-plugin.toml` 或 `object-batch.json`；确实要重建时使用 `--force`。
 
 Manifest 示例：
 

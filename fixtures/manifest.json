@@ -68,6 +68,23 @@
       }
     },
     {
+      "id": "synthetic-pe-runtime-generated",
+      "path": "tests/commands/tests/command_pipeline.rs::synthetic_pe_fixture",
+      "kind": "generated-binary-fixture",
+      "format": "pe",
+      "architecture": "x86_64",
+      "source-controlled": false,
+      "generation": "runtime test helper; no proprietary Windows system binary is committed",
+      "expected": {
+        "status": "succeeded",
+        "min_sections": 2,
+        "min_imports": 1,
+        "min_strings": 2,
+        "imports": ["kernel32.dll!ExitProcess"],
+        "strings": ["admin-token", "notepad"]
+      }
+    },
+    {
       "id": "corrupt-elf",
       "path": "fixtures/binaries/corrupt_elf",
       "kind": "binary",

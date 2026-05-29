@@ -7,4 +7,10 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
 revdeck-core = { path = "../../crates/revdeck-core" }
+revdeck-db = { path = "../../crates/revdeck-db" }
+revdeck-index = { path = "../../crates/revdeck-index" }
+serde_json.workspace = true
+tempfile.workspace = true

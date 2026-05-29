@@ -1,0 +1,34 @@
+{
+  "id": "TASK-013",
+  "title": "Diff Lab triage improvements",
+  "status": "completed",
+  "purpose": "Turn raw artifact diffs into prioritized triage evidence for changed imports, strings, functions, findings, and graph deltas.",
+  "read_first": [
+    "crates/revdeck-core/src/view_models/mod.rs",
+    "crates/revdeck-db/src/query.rs",
+    "crates/revdeck-cli/src/main.rs",
+    "tests/diff/tests/diff_lab.rs"
+  ],
+  "files": [
+    "crates/revdeck-core/src/view_models/mod.rs",
+    "crates/revdeck-db/src/query.rs",
+    "crates/revdeck-cli/src/main.rs",
+    "tests/diff/tests/diff_lab.rs",
+    "README.md"
+  ],
+  "actions": [
+    "Add risk summary for changed dangerous imports and sensitive strings",
+    "Expose diff rows with object refs and labels in CLI JSON",
+    "Add TUI Inspector details for changed rows",
+    "Document version-to-version triage workflow"
+  ],
+  "convergence": {
+    "criteria": [
+      "Existing diff command output remains backward compatible in text summary",
+      "JSON output includes risk summary and per-row object refs",
+      "Tests cover added, removed, changed, and unchanged rows",
+      "Changed risky evidence is visible in Report Lab coverage"
+    ]
+  },
+  "summary": "Implemented Diff Lab risk summary, per-row risk reasons/refs in JSON, and persisted risk metadata."
+}

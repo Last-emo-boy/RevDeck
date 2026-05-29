@@ -1,6 +1,8 @@
+use assert_cmd::prelude::*;
 use revdeck_core::{
-    pre_export_validation, render_json, render_json_bundle, render_markdown, ExportBundle, Finding,
-    FindingEvidence, FindingSeverity, FindingStatus, ObjectKind, ObjectRef, StableObjectKey,
+    export_gate_summary, pre_export_validation, render_json, render_json_bundle, render_markdown,
+    render_template_json, ExportBundle, Finding, FindingEvidence, FindingSeverity, FindingStatus,
+    ObjectKind, ObjectRef, ReportTemplate, StableObjectKey,
 };
 use revdeck_db::{
     migrations::migrate, AnalysisJobRepository, ArtifactRecord, ArtifactRepository,
@@ -8,7 +10,33 @@ use revdeck_db::{
     NewPluginRun, ObjectRepository, PluginRunRepository, StoredObject,
 };
 use rusqlite::Connection;
+use std::process::Command;
+use std::{path::PathBuf, sync::Once};
 use time::macros::datetime;
+
+static BUILD_REVDECK: Once = Once::new();
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+}
+
+fn revdeck_bin() -> PathBuf {
+    BUILD_REVDECK.call_once(|| {
+        Command::new("cargo")
+            .current_dir(workspace_root())
+            .args(["build", "-p", "revdeck-cli", "--bin", "revdeck"])
+            .assert()
+            .success();
+    });
+    let exe = if cfg!(windows) {
+        "revdeck.exe"
+    } else {
+        "revdeck"
+    };
+    workspace_root().join("target").join("debug").join(exe)
+}
 
 fn migrated_connection() -> Connection {
     let mut connection = Connection::open_in_memory().unwrap();
@@ -363,6 +391,39 @@ fn export_bundle_includes_analysis_jobs_and_warns_on_skipped_jobs() {
 }
 
 #[test]
+fn export_templates_emit_summary_and_ci_gate_payloads() {
+    let connection = migrated_connection();
+    let (artifact, function, finding) = seed_project(&connection);
+    seed_finding(&connection, &function, &finding);
+    seed_analysis_job(&connection, &artifact, "skipped");
+
+    let context = FindingRepository::new(&connection)
+        .export_context(datetime!(2026-05-13 00:11 UTC))
+        .unwrap();
+    let summary: serde_json::Value = serde_json::from_str(
+        &render_template_json(&context, ReportTemplate::Summary, Some(1)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(summary["template"], "summary");
+    assert_eq!(summary["gate"]["passed"], true);
+    assert_eq!(summary["gate"]["lab_coverage"], 1);
+    assert!(summary["validation"]["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue["code"] == "skipped_analysis_job"));
+
+    let ci: serde_json::Value =
+        serde_json::from_str(&render_template_json(&context, ReportTemplate::Ci, Some(2)).unwrap())
+            .unwrap();
+    assert_eq!(ci["template"], "ci");
+    assert_eq!(ci["gate"]["passed"], false);
+    assert_eq!(ci["gate"]["min_lab_coverage"], 2);
+    let gate = export_gate_summary(&context, ReportTemplate::Ci, Some(2));
+    assert!(!gate.passed);
+}
+
+#[test]
 fn export_release_gate_fails_on_failed_analysis_job() {
     let connection = migrated_connection();
     let (artifact, function, finding) = seed_project(&connection);
@@ -418,6 +479,55 @@ fn export_bundle_includes_plugin_run_provenance() {
     assert_eq!(bundle.plugin_runs[0].plugin_id, "com.example.auth");
     assert_eq!(bundle.evidence_objects[0].lab_id.as_deref(), Some("plugin"));
     assert!(bundle.validation.errors.is_empty());
+}
+
+#[test]
+fn cli_bundle_export_writes_manifest_database_and_report() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = revdeck_db::ProjectDatabase::create_or_open(temp.path()).unwrap();
+    let (artifact, function, finding) = seed_project(project.connection());
+    seed_finding(project.connection(), &function, &finding);
+    seed_analysis_job(project.connection(), &artifact, "succeeded");
+    drop(project);
+
+    let out = temp.path().join("bundle");
+    let output = Command::new(revdeck_bin())
+        .args([
+            "bundle",
+            "export",
+            temp.path().to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let manifest: serde_json::Value = serde_json::from_slice(&output).unwrap();
+
+    assert_eq!(manifest["schema"], "revdeck.bundle.v1");
+    assert_eq!(
+        manifest["schema_version"].as_i64().unwrap(),
+        revdeck_db::migrations::SCHEMA_VERSION
+    );
+    assert!(manifest["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|artifact| artifact["sha256"].as_str().is_some()
+            && artifact["import_status"] == "indexed"));
+    assert!(out.join("revdeck-bundle-manifest.json").exists());
+    assert!(out.join("project.sqlite").exists());
+    assert!(out.join("report.json").exists());
+    assert!(manifest["exclusions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item
+            .as_str()
+            .unwrap_or_default()
+            .contains("target build outputs")));
 }
 
 #[test]

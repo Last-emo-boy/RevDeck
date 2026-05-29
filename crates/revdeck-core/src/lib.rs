@@ -23,10 +23,11 @@ pub use commands::{
 };
 pub use error::{RevDeckError, RevDeckResult};
 pub use export::{
-    export_bundle, pre_export_validation, render_json, render_json_bundle, render_markdown,
-    validate_export, validation_report, ExportAnalysisJob, ExportBundle, ExportContext,
-    ExportEvidenceObject, ExportLabSummary, ExportPluginRun, ExportValidationError,
-    ExportValidationIssue, ExportValidationReport, Report, ReportFormat,
+    export_bundle, export_gate_summary, pre_export_validation, render_json, render_json_bundle,
+    render_markdown, render_template_json, validate_export, validation_report, ExportAnalysisJob,
+    ExportBundle, ExportCaseMetadata, ExportCaseNote, ExportContext, ExportEvidenceObject,
+    ExportGateSummary, ExportLabSummary, ExportPluginRun, ExportValidationError,
+    ExportValidationIssue, ExportValidationReport, Report, ReportFormat, ReportTemplate,
 };
 pub use findings::{lab_id_for_kind, Finding, FindingEvidence, FindingSeverity, FindingStatus};
 pub use memory::{Annotation, AnnotationEvidence, AnnotationKind};
@@ -36,16 +37,18 @@ pub use navigation::{
 };
 pub use object::{EdgeKind, ObjectKind, ObjectRef, StableObjectKey, StableObjectKeyBuilder};
 pub use query::{
-    EvidencePathItem, InMemoryObjectGraph, LocalTraversal, ObjectGraphQuery, ObjectRelation,
-    ObjectSearch, ObjectSummary, QueryError, RelationDirection, RelationFilter, TraversalNode,
-    TraversalOptions,
+    DisassemblyBasicBlock, DisassemblyInstruction, DisassemblyPreview, EvidencePathItem,
+    InMemoryObjectGraph, LocalTraversal, ObjectGraphQuery, ObjectRelation, ObjectSearch,
+    ObjectSummary, QueryError, RelationDirection, RelationFilter, TraversalNode, TraversalOptions,
 };
 pub use radar::{
+    classify_import_family, classify_known_library_baseline, classify_string_signal,
     filter_function_scores, score_function, score_functions, sort_function_scores,
-    FunctionRadarFilter, FunctionScore, FunctionScoreInput, RadarEvidence, ScoreReason,
-    FUNCTION_RADAR_SCORE_KIND, SIGNAL_ANALYST_TAG, SIGNAL_BOUNDARY_CONFIDENCE, SIGNAL_CALL_COUNT,
-    SIGNAL_DANGEROUS_IMPORT, SIGNAL_ENTRYPOINT, SIGNAL_FUNCTION_SIZE, SIGNAL_SENSITIVE_STRING,
-    SIGNAL_XREF_COUNT,
+    FunctionRadarFilter, FunctionScore, FunctionScoreInput, ImportFamily, KnownLibraryBaselineHit,
+    RadarEvidence, ScoreReason, StringSignal, FUNCTION_RADAR_SCORE_KIND, SIGNAL_ANALYST_TAG,
+    SIGNAL_BOUNDARY_CONFIDENCE, SIGNAL_CALL_COUNT, SIGNAL_DANGEROUS_IMPORT, SIGNAL_ENTRYPOINT,
+    SIGNAL_FUNCTION_SIZE, SIGNAL_IMPORT_FAMILY, SIGNAL_KNOWN_LIBRARY_BASELINE,
+    SIGNAL_SENSITIVE_STRING, SIGNAL_STRING_SIGNAL, SIGNAL_XREF_COUNT,
 };
 pub use view_models::{
     map_va_to_file_offset, AnalysisJobDetail, AnalysisJobDetailItem, AnalysisJobRow,

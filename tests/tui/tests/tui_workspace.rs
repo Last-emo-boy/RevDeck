@@ -476,6 +476,8 @@ fn render_help_overlay() {
     assert!(text.contains("Navigation"));
     assert!(text.contains("D diff"));
     assert!(text.contains(":find string password"));
+    assert!(text.contains("revdeck search / inspect / xrefs / disasm"));
+    assert!(text.contains("G graph, [/] filters"));
     assert!(text.contains(":hex-search window"));
     assert!(text.contains("file + window offsets"));
     assert!(text.contains(":hex-find full file"));
@@ -740,9 +742,44 @@ fn graph_lab_shortcut_preserves_selection_and_renders_relations() {
 
     assert!(text.contains("Graph Lab"));
     assert!(text.contains("relation filter"));
+    assert!(text.contains("active filter: all"));
     assert!(text.contains("Path Rows"));
     assert!(text.contains("Selected Edge"));
     assert!(text.contains("Local Relations"));
+    assert!(text.contains("CALLS_IMPORT"));
+}
+
+#[test]
+fn graph_lab_filter_keys_cycle_active_relation_filter() {
+    let snapshot = WorkspaceSnapshot::demo();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    let graph = graph(&snapshot);
+    app.apply_action(
+        TuiAction::SwitchLens(NavigationLens::FunctionRadar),
+        &snapshot,
+    )
+    .unwrap();
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::LocalGraph), &snapshot)
+        .unwrap();
+
+    assert_eq!(app.graph_filter, revdeck_core::RelationFilter::All);
+    app.handle_key_event(
+        KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE),
+        &snapshot,
+        &graph,
+    )
+    .unwrap();
+
+    assert_eq!(app.graph_filter, revdeck_core::RelationFilter::Calls);
+    assert!(app.status_line.contains("graph filter calls"));
+    let backend = TestBackend::new(120, 48);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+    assert!(text.contains("active filter: calls"));
+    assert!(text.contains("[calls"));
     assert!(text.contains("CALLS_IMPORT"));
 }
 
@@ -972,6 +1009,9 @@ fn command_deck_overlay_traps_navigation_until_closed() {
     assert!(text.contains("Command Deck"));
     assert!(text.contains("Current Object"));
     assert!(text.contains(":xrefs current"));
+    assert!(text.contains(":xrefs current / depth 2"));
+    assert!(text.contains("revdeck inspect/xrefs/disasm/sections/imports/strings"));
+    assert!(text.contains("Graph: G graph [/] filters"));
     assert!(text.contains(":hex current/selected or :hex-current"));
     assert!(text.contains(":hex-search / :bytes-search"));
     assert!(text.contains(":hex-find / :bytes-find"));

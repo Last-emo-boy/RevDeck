@@ -1,0 +1,33 @@
+{
+  "id": "TASK-008",
+  "title": "Function evidence packet",
+  "status": "completed",
+  "purpose": "Create one compact function-centric packet that collects the evidence analysts repeatedly inspect across Radar, Graph, Imports, Strings, and Notes.",
+  "read_first": [
+    "crates/revdeck-core/src/view_models/mod.rs",
+    "crates/revdeck-db/src/repo.rs",
+    "crates/revdeck-tui/src/lib.rs",
+    "tests/tui/tests/tui_workspace.rs"
+  ],
+  "files": [
+    "crates/revdeck-core/src/view_models/mod.rs",
+    "crates/revdeck-db/src/repo.rs",
+    "crates/revdeck-cli/src/main.rs",
+    "crates/revdeck-tui/src/lib.rs",
+    "tests/tui/tests/tui_workspace.rs"
+  ],
+  "actions": [
+    "Define FunctionEvidencePacket view model",
+    "Load imports, strings, xrefs, score reasons, CFG status, tags, notes, and findings for one function",
+    "Add CLI inspect integration for function packets",
+    "Render packet summary in TUI Inspector"
+  ],
+  "convergence": {
+    "criteria": [
+      "Packet generation is bounded and does not load full binary bytes",
+      "Missing CFG evidence is represented as unavailable, not failed",
+      "Function Inspector includes packet summary",
+      "Tests cover function with import, string, score, and note evidence"
+    ]
+  }
+}

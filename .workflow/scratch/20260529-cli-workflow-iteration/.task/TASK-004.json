@@ -1,0 +1,32 @@
+{
+  "id": "TASK-004",
+  "title": "CLI sections and binary map detail",
+  "status": "completed",
+  "purpose": "Expose binary map information outside the TUI for quick PE/ELF triage, including section layout and offset mapping evidence.",
+  "read_first": [
+    "crates/revdeck-cli/src/main.rs",
+    "crates/revdeck-db/src/repo.rs",
+    "crates/revdeck-db/src/query.rs",
+    "crates/revdeck-core/src/view_models/mod.rs"
+  ],
+  "files": [
+    "crates/revdeck-cli/src/main.rs",
+    "crates/revdeck-db/src/query.rs",
+    "tests/foundation/tests/foundation.rs",
+    "README.md"
+  ],
+  "actions": [
+    "Add revdeck sections <project_dir> [--artifact <artifact-ref>]",
+    "Render section name, virtual address, file offset, size, flags, entropy",
+    "Add JSON output for automation",
+    "Document Notepad section triage examples"
+  ],
+  "convergence": {
+    "criteria": [
+      "CLI can list indexed sections for a PE/ELF artifact",
+      "Output includes file offset and virtual address side by side",
+      "JSON schema is stable enough for report scripts",
+      "Tests cover section records with and without file_offset"
+    ]
+  }
+}

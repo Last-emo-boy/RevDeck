@@ -1,7 +1,7 @@
 use revdeck_core::{
-    DiffArtifactSnapshot, DiffComparableObject, DiffComparableRelation, EdgeKind, ObjectGraphQuery,
-    ObjectKind, ObjectRef, ObjectRelation, ObjectSearch, ObjectSummary, QueryError,
-    RelationDirection,
+    DiffArtifactSnapshot, DiffComparableObject, DiffComparableRelation, DisassemblyBasicBlock,
+    DisassemblyInstruction, DisassemblyPreview, EdgeKind, ObjectGraphQuery, ObjectKind, ObjectRef,
+    ObjectRelation, ObjectSearch, ObjectSummary, QueryError, RelationDirection,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::BTreeMap;
@@ -13,6 +13,116 @@ pub struct ObjectQueryRepository<'conn> {
 impl<'conn> ObjectQueryRepository<'conn> {
     pub fn new(connection: &'conn Connection) -> Self {
         Self { connection }
+    }
+
+    pub fn disassembly_preview(
+        &self,
+        function_ref: &ObjectRef,
+        limit: usize,
+    ) -> Result<Option<DisassemblyPreview>, QueryError> {
+        if function_ref.kind != ObjectKind::Function {
+            return Ok(None);
+        }
+        let Some(function) = self.get_object(function_ref)? else {
+            return Ok(None);
+        };
+        let total_basic_blocks = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM basic_blocks WHERE function_key = ?1",
+                [function_ref.key.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(from_i64)
+            .map(|value| value as usize)
+            .map_err(db_error)?;
+        let total_instructions = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM instructions WHERE function_key = ?1",
+                [function_ref.key.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(from_i64)
+            .map(|value| value as usize)
+            .map_err(db_error)?;
+
+        let row_limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut block_statement = self
+            .connection
+            .prepare(
+                "SELECT object_key, start_address, end_address, size, ordinal, terminator,
+                    confidence
+                FROM basic_blocks
+                WHERE function_key = ?1
+                ORDER BY start_address, ordinal, object_key
+                LIMIT ?2",
+            )
+            .map_err(db_error)?;
+        let basic_blocks = block_statement
+            .query_map(params![function_ref.key.as_str(), row_limit], |row| {
+                let object_key: String = row.get(0)?;
+                Ok(DisassemblyBasicBlock {
+                    object_ref: ObjectRef::new(
+                        ObjectKind::BasicBlock,
+                        object_key.parse().map_err(from_core_error)?,
+                    ),
+                    start_address: from_i64(row.get(1)?),
+                    end_address: from_i64(row.get(2)?),
+                    size: from_i64(row.get(3)?),
+                    ordinal: from_i64(row.get(4)?),
+                    terminator: row.get(5)?,
+                    confidence: row.get(6)?,
+                })
+            })
+            .map_err(db_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error)?;
+
+        let mut instruction_statement = self
+            .connection
+            .prepare(
+                "SELECT object_key, block_key, address, size, bytes_hex, mnemonic,
+                    operands_text, ordinal, confidence
+                FROM instructions
+                WHERE function_key = ?1
+                ORDER BY address, ordinal, object_key
+                LIMIT ?2",
+            )
+            .map_err(db_error)?;
+        let instructions = instruction_statement
+            .query_map(params![function_ref.key.as_str(), row_limit], |row| {
+                let object_key: String = row.get(0)?;
+                let block_key: String = row.get(1)?;
+                Ok(DisassemblyInstruction {
+                    object_ref: ObjectRef::new(
+                        ObjectKind::Instruction,
+                        object_key.parse().map_err(from_core_error)?,
+                    ),
+                    block_ref: ObjectRef::new(
+                        ObjectKind::BasicBlock,
+                        block_key.parse().map_err(from_core_error)?,
+                    ),
+                    address: from_i64(row.get(2)?),
+                    size: from_i64(row.get(3)?),
+                    bytes_hex: row.get(4)?,
+                    mnemonic: row.get(5)?,
+                    operands_text: row.get(6)?,
+                    ordinal: from_i64(row.get(7)?),
+                    confidence: row.get(8)?,
+                })
+            })
+            .map_err(db_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error)?;
+
+        Ok(Some(DisassemblyPreview {
+            function,
+            total_basic_blocks,
+            total_instructions,
+            basic_blocks,
+            instructions,
+        }))
     }
 
     pub fn diff_artifact_snapshot(

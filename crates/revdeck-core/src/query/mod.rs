@@ -153,6 +153,39 @@ impl ObjectSearch {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisassemblyPreview {
+    pub function: ObjectSummary,
+    pub total_basic_blocks: usize,
+    pub total_instructions: usize,
+    pub basic_blocks: Vec<DisassemblyBasicBlock>,
+    pub instructions: Vec<DisassemblyInstruction>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisassemblyBasicBlock {
+    pub object_ref: ObjectRef,
+    pub start_address: u64,
+    pub end_address: u64,
+    pub size: u64,
+    pub ordinal: u64,
+    pub terminator: String,
+    pub confidence: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisassemblyInstruction {
+    pub object_ref: ObjectRef,
+    pub block_ref: ObjectRef,
+    pub address: u64,
+    pub size: u64,
+    pub bytes_hex: String,
+    pub mnemonic: String,
+    pub operands_text: String,
+    pub ordinal: u64,
+    pub confidence: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraversalOptions {
     pub root: ObjectRef,

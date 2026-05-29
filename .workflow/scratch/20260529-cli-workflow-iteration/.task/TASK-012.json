@@ -1,0 +1,33 @@
+{
+  "id": "TASK-012",
+  "title": "Graph Lab filters and path finding",
+  "status": "completed",
+  "purpose": "Improve graph exploration by allowing analysts to filter relation types and find bounded evidence paths.",
+  "read_first": [
+    "crates/revdeck-core/src/query/mod.rs",
+    "crates/revdeck-core/src/navigation/mod.rs",
+    "crates/revdeck-tui/src/lib.rs",
+    "tests/navigation/tests/navigation_flow.rs"
+  ],
+  "files": [
+    "crates/revdeck-core/src/query/mod.rs",
+    "crates/revdeck-core/src/view_models/mod.rs",
+    "crates/revdeck-tui/src/lib.rs",
+    "tests/navigation/tests/navigation_flow.rs",
+    "tests/tui/tests/tui_workspace.rs"
+  ],
+  "actions": [
+    "Add Graph Lab filter state for calls, xrefs, containment, evidence, timeline, diff, and plugin",
+    "Add source-to-sink bounded path command",
+    "Render active filter and path result summary",
+    "Add Inspector jump support for path rows"
+  ],
+  "convergence": {
+    "criteria": [
+      "Existing Graph Lab all-relations behavior remains default",
+      "Filters use existing RelationFilter semantics",
+      "Path finding has max depth/node limits",
+      "Tests cover call-only and evidence-only graph views"
+    ]
+  }
+}

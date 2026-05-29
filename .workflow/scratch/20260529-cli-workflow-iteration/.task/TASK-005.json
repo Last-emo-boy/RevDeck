@@ -1,0 +1,31 @@
+{
+  "id": "TASK-005",
+  "title": "CLI import and string summaries",
+  "status": "completed",
+  "purpose": "Make common first-pass reverse engineering questions answerable from the shell: what APIs are imported and what strings stand out.",
+  "read_first": [
+    "crates/revdeck-cli/src/main.rs",
+    "crates/revdeck-index/src/lib.rs",
+    "crates/revdeck-db/src/query.rs",
+    "README.md"
+  ],
+  "files": [
+    "crates/revdeck-cli/src/main.rs",
+    "tests/commands/tests/command_pipeline.rs",
+    "README.md"
+  ],
+  "actions": [
+    "Add revdeck imports <project_dir> [--module <name>] [--json]",
+    "Add revdeck strings <project_dir> [--contains <term>] [--min-len <n>] [--json]",
+    "Include artifact filtering once artifact refs are available",
+    "Keep output bounded by --limit"
+  ],
+  "convergence": {
+    "criteria": [
+      "Imports command lists module, symbol, ordinal, and object ref",
+      "Strings command lists value, file offset, VA, length, and object ref",
+      "Both commands support --limit and --json",
+      "Tests cover sensitive_imports_elf fixture"
+    ]
+  }
+}

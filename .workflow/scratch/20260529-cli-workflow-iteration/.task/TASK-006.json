@@ -1,0 +1,33 @@
+{
+  "id": "TASK-006",
+  "title": "API and import family classification",
+  "status": "completed",
+  "purpose": "Group imports into analyst-relevant families so Notepad and malware-like samples can be triaged by capability instead of raw symbol lists.",
+  "read_first": [
+    "crates/revdeck-core/src/radar/mod.rs",
+    "crates/revdeck-index/src/lib.rs",
+    "crates/revdeck-db/src/repo.rs",
+    "crates/revdeck-tui/src/lib.rs"
+  ],
+  "files": [
+    "crates/revdeck-core/src/radar/mod.rs",
+    "crates/revdeck-core/src/view_models/mod.rs",
+    "crates/revdeck-db/src/repo.rs",
+    "crates/revdeck-tui/src/lib.rs",
+    "tests/radar/tests/radar_fixture.rs"
+  ],
+  "actions": [
+    "Define import families for process, filesystem, registry, network, crypto, memory, loader, UI, and libc",
+    "Add family metadata to import evidence or derived summaries",
+    "Surface families in Function Radar reasons and Inspector",
+    "Add JSON/text summary hooks for CLI commands"
+  ],
+  "convergence": {
+    "criteria": [
+      "Dangerous imports retain current radar behavior",
+      "Classification is deterministic and case-insensitive",
+      "Unknown imports fall back to uncategorized",
+      "Tests cover Win32 and libc examples"
+    ]
+  }
+}

@@ -1,0 +1,206 @@
+{
+  "id": "20260529-cli-workflow-iteration",
+  "title": "RevDeck feature iteration backlog",
+  "status": "planned",
+  "created_at": "2026-05-29T09:15:00+08:00",
+  "updated_at": "2026-05-29T10:45:00+08:00",
+  "objective": "Capture the next functional iterations for RevDeck after competitor review, prioritizing shell-first triage, richer evidence, TUI pivots, and report automation.",
+  "scope": {
+    "include": [
+      "CLI search and inspect workflows",
+      "Command-line graph and xref traversal",
+      "Import/string/API classification",
+      "Binary map detail expansion",
+      "Function and relation evidence workflows",
+      "Diff, trace, firmware, crash, protocol, plugin, and report Lab improvements",
+      "Automation-friendly JSON output and regression coverage"
+    ],
+    "exclude": [
+      "Full decompiler parity with Ghidra/IDA/Binary Ninja",
+      "Live debugger parity with x64dbg",
+      "Public plugin marketplace",
+      "Binary patch editing or patch application",
+      "Remote collaboration service"
+    ]
+  },
+  "waves": [
+    {
+      "wave": 1,
+      "theme": "Shell-first triage",
+      "tasks": [
+        "TASK-001",
+        "TASK-002",
+        "TASK-003",
+        "TASK-004",
+        "TASK-005"
+      ]
+    },
+    {
+      "wave": 2,
+      "theme": "Static evidence enrichment",
+      "tasks": [
+        "TASK-006",
+        "TASK-007",
+        "TASK-008",
+        "TASK-009",
+        "TASK-010"
+      ]
+    },
+    {
+      "wave": 3,
+      "theme": "Lab workflow depth",
+      "tasks": [
+        "TASK-011",
+        "TASK-012",
+        "TASK-013",
+        "TASK-014",
+        "TASK-015"
+      ]
+    },
+    {
+      "wave": 4,
+      "theme": "Automation, plugins, and delivery",
+      "tasks": [
+        "TASK-016",
+        "TASK-017",
+        "TASK-018",
+        "TASK-019",
+        "TASK-020"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "CLI object search",
+      "status": "completed",
+      "summary": "Implemented revdeck search with --kind, --limit, --json, text table output, README docs, and command integration coverage."
+    },
+    {
+      "id": "TASK-002",
+      "title": "CLI object inspect",
+      "status": "completed",
+      "summary": "Implemented revdeck inspect with ObjectRef parsing, metadata rendering, bounded relation summaries, JSON output, README docs, and command integration coverage."
+    },
+    {
+      "id": "TASK-003",
+      "title": "CLI xrefs and relation traversal",
+      "status": "completed",
+      "summary": "Add revdeck xrefs for source/sink traversal with direction, edge-kind, depth, and JSON output."
+    },
+    {
+      "id": "TASK-004",
+      "title": "CLI sections and binary map detail",
+      "status": "completed",
+      "summary": "Expose section tables, file offsets, virtual addresses, entropy, permissions, and format summary from CLI."
+    },
+    {
+      "id": "TASK-005",
+      "title": "CLI import and string summaries",
+      "status": "completed",
+      "summary": "Add grouped imports/strings commands for Notepad-style quick triage and automation."
+    },
+    {
+      "id": "TASK-006",
+      "title": "API and import family classification",
+      "status": "completed",
+      "summary": "Classify imports into process, filesystem, registry, network, crypto, memory, dynamic loading, UI, and libc families."
+    },
+    {
+      "id": "TASK-007",
+      "title": "String signal classifier",
+      "status": "completed",
+      "summary": "Classify strings as URLs, file paths, registry keys, commands, credentials, format strings, UI text, debug strings, or low-value noise."
+    },
+    {
+      "id": "TASK-008",
+      "title": "Function evidence packet",
+      "status": "completed",
+      "summary": "Build a compact per-function evidence packet combining imports, strings, xrefs, CFG availability, score reasons, and notes."
+    },
+    {
+      "id": "TASK-009",
+      "title": "Instruction and basic block CLI preview",
+      "status": "completed",
+      "summary": "Implemented revdeck disasm with bounded basic-block/instruction preview, JSON output, and quick-profile unavailable handling."
+    },
+    {
+      "id": "TASK-010",
+      "title": "Signature and known-library baseline",
+      "status": "completed",
+      "summary": "Added known-library baseline scoring metadata for common runtime/compiler boilerplate without suppressing dangerous evidence."
+    },
+    {
+      "id": "TASK-011",
+      "title": "TUI command deck expansion",
+      "status": "completed",
+      "summary": "Expanded TUI Help and Command Deck with implemented shell-equivalent search, inspect, xrefs, disasm, import/string, and graph workflow examples."
+    },
+    {
+      "id": "TASK-012",
+      "title": "Graph Lab filters and path finding",
+      "status": "completed",
+      "summary": "Added TUI Graph Lab filter state, keyboard cycling for relation filters, active-filter rendering, and path/filter coverage."
+    },
+    {
+      "id": "TASK-013",
+      "title": "Diff Lab triage improvements",
+      "status": "completed",
+      "summary": "Implemented Diff Lab risk summary, per-row risk reasons/refs in JSON, and persisted risk metadata."
+    },
+    {
+      "id": "TASK-014",
+      "title": "Trace and crash correlation depth",
+      "status": "completed",
+      "summary": "Added trace/crash correlation quality metadata, confidence summaries, uncorrelated counts, and status JSON details."
+    },
+    {
+      "id": "TASK-015",
+      "title": "Protocol and firmware evidence pivots",
+      "status": "completed",
+      "summary": "Added protocol field pivots, firmware nested artifact summaries, and richer status JSON pivots."
+    },
+    {
+      "id": "TASK-016",
+      "title": "Plugin SDK command scaffolding",
+      "status": "completed",
+      "summary": "Added plugin scaffold command/API with overwrite protection, generated manifest/ObjectBatch, docs, and validation tests."
+    },
+    {
+      "id": "TASK-017",
+      "title": "Report templates and release gates",
+      "status": "completed",
+      "summary": "Added report templates, CI gate summary, min lab coverage gate, and export tests."
+    },
+    {
+      "id": "TASK-018",
+      "title": "Project metadata and case notes",
+      "status": "completed",
+      "summary": "Added project metadata/notes migration, repository, CLI commands, and export context integration."
+    },
+    {
+      "id": "TASK-019",
+      "title": "Workspace packaging and reproducibility",
+      "status": "completed",
+      "summary": "Added bundle export manifest with schema version, artifact identity, report/database artifacts, and CLI test."
+    },
+    {
+      "id": "TASK-020",
+      "title": "Regression suite for Windows PE samples",
+      "status": "completed",
+      "summary": "Added runtime synthetic PE command regression coverage, fixture manifest strategy, and Notepad workflow docs."
+    }
+  ],
+  "verification": [
+    "cargo fmt --all -- --check",
+    "cargo test -p revdeck-command-tests --no-fail-fast",
+    "cargo test -p revdeck-tui-tests --no-fail-fast",
+    "cargo check --workspace"
+  ],
+  "notes": [
+    "TASK-001 through TASK-020 are implemented in the working tree.",
+    "TASK-006/TASK-007 use derived classification without DB schema changes.",
+    "TASK-013 through TASK-020 add workflow depth, automation, project metadata, bundle export, and PE regression coverage.",
+    "Priority is based on immediate usefulness for analyzing Windows binaries such as notepad.exe while preserving RevDeck terminal-native evidence workflow."
+  ]
+}

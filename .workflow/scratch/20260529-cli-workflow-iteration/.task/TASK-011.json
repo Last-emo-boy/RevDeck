@@ -1,0 +1,30 @@
+{
+  "id": "TASK-011",
+  "title": "TUI command deck expansion",
+  "status": "completed",
+  "purpose": "Make new command-line capabilities discoverable inside the TUI and keep help text aligned with implemented commands.",
+  "read_first": [
+    "crates/revdeck-tui/src/lib.rs",
+    "README.md",
+    "tests/tui/tests/tui_workspace.rs"
+  ],
+  "files": [
+    "crates/revdeck-tui/src/lib.rs",
+    "tests/tui/tests/tui_workspace.rs",
+    "README.md"
+  ],
+  "actions": [
+    "Add search/inspect/xrefs command examples to Command Deck",
+    "Add contextual help for Shell workflow equivalents",
+    "Ensure overlay traps navigation as existing tests expect",
+    "Document command parity between CLI and TUI"
+  ],
+  "convergence": {
+    "criteria": [
+      "Command Deck includes implemented commands only",
+      "Help overlay text fits existing viewport assumptions",
+      "Tests verify command examples render",
+      "No keyboard behavior regressions"
+    ]
+  }
+}

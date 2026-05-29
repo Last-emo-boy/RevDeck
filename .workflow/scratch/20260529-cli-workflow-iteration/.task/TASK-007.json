@@ -1,0 +1,33 @@
+{
+  "id": "TASK-007",
+  "title": "String signal classifier",
+  "status": "completed",
+  "purpose": "Reduce string list noise by classifying strings into evidence categories and highlighting strings that should drive investigation.",
+  "read_first": [
+    "crates/revdeck-core/src/radar/mod.rs",
+    "crates/revdeck-index/src/lib.rs",
+    "crates/revdeck-core/src/view_models/mod.rs",
+    "tests/tui/tests/tui_workspace.rs"
+  ],
+  "files": [
+    "crates/revdeck-core/src/radar/mod.rs",
+    "crates/revdeck-index/src/lib.rs",
+    "crates/revdeck-tui/src/lib.rs",
+    "tests/radar/tests/radar_fixture.rs",
+    "tests/tui/tests/tui_workspace.rs"
+  ],
+  "actions": [
+    "Classify URLs, paths, registry keys, commands, credentials, format strings, UI text, debug strings, and low-value noise",
+    "Expose string signal metadata in Inspector",
+    "Feed high-value string classes into Function Radar scoring",
+    "Document string triage workflow"
+  ],
+  "convergence": {
+    "criteria": [
+      "Existing sensitive_string radar reasons still pass",
+      "Classifier returns at most one primary class and optional tags",
+      "Low-value strings do not raise risk by themselves",
+      "Tests cover credential, path, URL, UI, and noise cases"
+    ]
+  }
+}

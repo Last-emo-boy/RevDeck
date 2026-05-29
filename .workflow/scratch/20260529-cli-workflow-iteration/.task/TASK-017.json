@@ -1,0 +1,33 @@
+{
+  "id": "TASK-017",
+  "title": "Report templates and release gates",
+  "status": "completed",
+  "purpose": "Make report generation more useful in CI and handoff workflows by adding templates, coverage thresholds, and concise validation output.",
+  "read_first": [
+    "crates/revdeck-core/src/export/mod.rs",
+    "crates/revdeck-cli/src/main.rs",
+    "tests/export/tests/export_reports.rs",
+    "README.md"
+  ],
+  "files": [
+    "crates/revdeck-core/src/export/mod.rs",
+    "crates/revdeck-cli/src/main.rs",
+    "tests/export/tests/export_reports.rs",
+    "README.md"
+  ],
+  "actions": [
+    "Add report template option for summary, full, and CI JSON modes",
+    "Add Lab coverage threshold validation",
+    "Expose validation summary in CLI text output",
+    "Document release gate behavior"
+  ],
+  "convergence": {
+    "criteria": [
+      "Existing JSON and Markdown reports remain valid",
+      "Template selection is deterministic",
+      "CI mode returns non-zero on configured gate failures",
+      "Tests cover missing evidence and skipped job warnings"
+    ]
+  },
+  "summary": "Added report templates, CI gate summary, min lab coverage gate, and export tests."
+}

@@ -13,6 +13,14 @@ pub enum ReportFormat {
     Json,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportTemplate {
+    Summary,
+    Full,
+    Ci,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Report {
     pub generated_at: OffsetDateTime,
@@ -26,6 +34,8 @@ pub struct ExportContext {
     pub lab_summaries: Vec<ExportLabSummary>,
     pub analysis_jobs: Vec<ExportAnalysisJob>,
     pub plugin_runs: Vec<ExportPluginRun>,
+    pub case_metadata: Vec<ExportCaseMetadata>,
+    pub case_notes: Vec<ExportCaseNote>,
 }
 
 impl ExportContext {
@@ -37,6 +47,8 @@ impl ExportContext {
             lab_summaries,
             analysis_jobs: Vec::new(),
             plugin_runs: Vec::new(),
+            case_metadata: Vec::new(),
+            case_notes: Vec::new(),
         }
     }
 
@@ -52,7 +64,26 @@ pub struct ExportBundle {
     pub lab_summaries: Vec<ExportLabSummary>,
     pub analysis_jobs: Vec<ExportAnalysisJob>,
     pub plugin_runs: Vec<ExportPluginRun>,
+    pub case_metadata: Vec<ExportCaseMetadata>,
+    pub case_notes: Vec<ExportCaseNote>,
     pub validation: ExportValidationReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportCaseMetadata {
+    pub key: String,
+    pub value: String,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportCaseNote {
+    pub note_id: i64,
+    pub category: String,
+    pub title: String,
+    pub body: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +166,16 @@ pub struct ExportValidationIssue {
     pub message: String,
     pub finding: Option<String>,
     pub evidence: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportGateSummary {
+    pub template: ReportTemplate,
+    pub min_lab_coverage: Option<usize>,
+    pub lab_coverage: usize,
+    pub validation_errors: usize,
+    pub validation_warnings: usize,
+    pub passed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -337,6 +378,55 @@ pub fn render_json_bundle(context: &ExportContext) -> Result<String, serde_json:
     serde_json::to_string_pretty(&bundle)
 }
 
+pub fn export_gate_summary(
+    context: &ExportContext,
+    template: ReportTemplate,
+    min_lab_coverage: Option<usize>,
+) -> ExportGateSummary {
+    let validation = validation_report(context);
+    let lab_coverage = context.lab_summaries.len();
+    let passed = validation.errors.is_empty()
+        && min_lab_coverage
+            .map(|minimum| lab_coverage >= minimum)
+            .unwrap_or(true);
+    ExportGateSummary {
+        template,
+        min_lab_coverage,
+        lab_coverage,
+        validation_errors: validation.errors.len(),
+        validation_warnings: validation.warnings.len(),
+        passed,
+    }
+}
+
+pub fn render_template_json(
+    context: &ExportContext,
+    template: ReportTemplate,
+    min_lab_coverage: Option<usize>,
+) -> Result<String, serde_json::Error> {
+    match template {
+        ReportTemplate::Summary => serde_json::to_string_pretty(&serde_json::json!({
+            "template": template,
+            "generated_at": context.report.generated_at,
+            "findings": context.report.findings.len(),
+            "lab_summaries": context.lab_summaries,
+            "gate": export_gate_summary(context, template, min_lab_coverage),
+            "validation": validation_report(context)
+        })),
+        ReportTemplate::Full => render_json_bundle(context),
+        ReportTemplate::Ci => serde_json::to_string_pretty(&serde_json::json!({
+            "template": template,
+            "gate": export_gate_summary(context, template, min_lab_coverage),
+            "validation": validation_report(context),
+            "lab_summaries": context.lab_summaries,
+            "analysis_jobs": context.analysis_jobs,
+            "plugin_runs": context.plugin_runs,
+            "case_metadata": context.case_metadata,
+            "case_notes": context.case_notes
+        })),
+    }
+}
+
 pub fn export_bundle(context: &ExportContext) -> ExportBundle {
     let mut report = context.report.clone();
     normalize_report(&mut report);
@@ -371,6 +461,8 @@ pub fn export_bundle(context: &ExportContext) -> ExportBundle {
         lab_summaries,
         analysis_jobs,
         plugin_runs,
+        case_metadata: context.case_metadata.clone(),
+        case_notes: context.case_notes.clone(),
         validation: validation_report(context),
     }
 }
@@ -380,6 +472,19 @@ pub fn render_markdown(context: &ExportContext) -> String {
     normalize_report(&mut report);
     let mut markdown = String::from("# RevDeck Findings Report\n\n");
     markdown.push_str(&format!("Generated: {}\n\n", report.generated_at));
+    if !context.case_metadata.is_empty() || !context.case_notes.is_empty() {
+        markdown.push_str("## Case Metadata\n\n");
+        for item in &context.case_metadata {
+            markdown.push_str(&format!("- `{}`: {}\n", item.key, item.value));
+        }
+        for note in &context.case_notes {
+            markdown.push_str(&format!(
+                "- Note #{} [{}] {}: {}\n",
+                note.note_id, note.category, note.title, note.body
+            ));
+        }
+        markdown.push('\n');
+    }
     if !context.lab_summaries.is_empty() {
         markdown.push_str("## Lab Coverage\n\n");
         let mut lab_summaries = context.lab_summaries.clone();

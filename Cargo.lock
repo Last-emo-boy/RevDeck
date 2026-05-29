@@ -792,7 +792,13 @@ dependencies = [
 name = "revdeck-command-tests"
 version = "0.1.0"
 dependencies = [
+ "assert_cmd",
+ "predicates",
  "revdeck-core",
+ "revdeck-db",
+ "revdeck-index",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -848,10 +854,12 @@ dependencies = [
 name = "revdeck-export-tests"
 version = "0.1.0"
 dependencies = [
+ "assert_cmd",
  "revdeck-core",
  "revdeck-db",
  "rusqlite",
  "serde_json",
+ "tempfile",
  "time",
 ]
 

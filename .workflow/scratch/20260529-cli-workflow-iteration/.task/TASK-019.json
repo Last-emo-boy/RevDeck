@@ -1,0 +1,33 @@
+{
+  "id": "TASK-019",
+  "title": "Workspace packaging and reproducibility",
+  "status": "completed",
+  "purpose": "Let users package and move a RevDeck case with enough provenance to reproduce analysis context later.",
+  "read_first": [
+    "crates/revdeck-cli/src/main.rs",
+    "crates/revdeck-db/src/lib.rs",
+    "crates/revdeck-core/src/export/mod.rs",
+    "README.md"
+  ],
+  "files": [
+    "crates/revdeck-cli/src/main.rs",
+    "crates/revdeck-core/src/export/mod.rs",
+    "tests/export/tests/export_reports.rs",
+    "README.md"
+  ],
+  "actions": [
+    "Add revdeck bundle export <project_dir> --out <path>",
+    "Record schema version, source identity, analysis profile, report artifacts, and plugin provenance",
+    "Add bundle manifest JSON",
+    "Document reproducibility guarantees and exclusions"
+  ],
+  "convergence": {
+    "criteria": [
+      "Bundle export does not include unintended local cache files",
+      "Manifest includes schema version and artifact identity",
+      "Command fails clearly if project cannot be opened",
+      "Tests validate manifest shape"
+    ]
+  },
+  "summary": "Added bundle export manifest with schema version, artifact identity, report/database artifacts, and CLI test."
+}

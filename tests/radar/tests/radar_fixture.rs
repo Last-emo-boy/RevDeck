@@ -1,6 +1,6 @@
 use revdeck_core::{
     FunctionRadarFilter, FunctionRadarViewModel, InspectorViewModel, ObjectKind,
-    SIGNAL_DANGEROUS_IMPORT, SIGNAL_SENSITIVE_STRING,
+    SIGNAL_DANGEROUS_IMPORT, SIGNAL_KNOWN_LIBRARY_BASELINE, SIGNAL_SENSITIVE_STRING,
 };
 use revdeck_db::{ProjectDatabase, RadarRepository};
 use revdeck_index::{import_binary, ImportOptions};
@@ -147,6 +147,22 @@ fn fixture_radar_rows_have_ordered_scores_and_evidence_reasons() {
                 .evidence_refs
                 .iter()
                 .any(|item| item.kind == ObjectKind::String)));
+    assert!(
+        top.reasons
+            .iter()
+            .filter(|reason| reason.signal_key == SIGNAL_KNOWN_LIBRARY_BASELINE)
+            .map(|reason| reason.contribution)
+            .sum::<i32>()
+            <= 0,
+        "baseline can annotate a risky function, but it must only lower priority"
+    );
+    assert!(scores.iter().any(|score| {
+        score.reasons.iter().any(|reason| {
+            reason.signal_key == SIGNAL_KNOWN_LIBRARY_BASELINE
+                && reason.contribution < 0
+                && reason.metadata.contains_key("confidence")
+        })
+    }));
     for reason in top.reasons.iter().filter(|reason| reason.contribution > 0) {
         for evidence_ref in &reason.evidence_refs {
             let exists: i64 = project
@@ -179,6 +195,22 @@ fn fixture_radar_rows_have_ordered_scores_and_evidence_reasons() {
     assert!(
         persisted_score_reasons_with_evidence > 0,
         "score reasons should persist evidence refs for later Labs"
+    );
+    let persisted_baseline_reasons: i64 = project
+        .connection()
+        .query_row(
+            "SELECT COUNT(*)
+            FROM score_reasons
+            WHERE signal_key = ?1
+              AND contribution < 0
+              AND metadata_json LIKE '%confidence%'",
+            [SIGNAL_KNOWN_LIBRARY_BASELINE],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        persisted_baseline_reasons > 0,
+        "known-library baseline hits should persist confidence metadata"
     );
 
     let radar = FunctionRadarViewModel::from_scores(

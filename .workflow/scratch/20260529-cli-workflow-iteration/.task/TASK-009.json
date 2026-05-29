@@ -1,0 +1,32 @@
+{
+  "id": "TASK-009",
+  "title": "Instruction and basic block CLI preview",
+  "status": "completed",
+  "purpose": "Expose the native CFG output in a bounded, scriptable preview so users can inspect low-level evidence without leaving the terminal.",
+  "read_first": [
+    "crates/revdeck-db/src/repo.rs",
+    "crates/revdeck-index/src/lib.rs",
+    "crates/revdeck-tui/src/lib.rs",
+    "tests/tui/tests/tui_workspace.rs"
+  ],
+  "files": [
+    "crates/revdeck-db/src/query.rs",
+    "crates/revdeck-cli/src/main.rs",
+    "tests/commands/tests/command_pipeline.rs",
+    "README.md"
+  ],
+  "actions": [
+    "Add revdeck disasm <project_dir> <function-ref> --limit <n>",
+    "List basic blocks and instructions when available",
+    "Emit skipped/unavailable message for quick profile",
+    "Support JSON output"
+  ],
+  "convergence": {
+    "criteria": [
+      "Command handles quick profile skipped CFG gracefully",
+      "Output is bounded by --limit",
+      "Instruction rows include VA, mnemonic/text, block ref, and object ref where available",
+      "Tests cover available and unavailable CFG states"
+    ]
+  }
+}

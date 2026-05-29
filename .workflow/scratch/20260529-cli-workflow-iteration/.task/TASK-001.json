@@ -1,0 +1,26 @@
+{
+  "id": "TASK-001",
+  "title": "CLI object search",
+  "status": "completed",
+  "purpose": "Let analysts search project objects without opening the TUI, matching common reverse engineering workflows where users first grep strings/imports/functions from the shell.",
+  "read_first": [
+    "crates/revdeck-cli/src/main.rs",
+    "crates/revdeck-db/src/query.rs",
+    "crates/revdeck-core/src/query/mod.rs",
+    "tests/commands/tests/command_pipeline.rs"
+  ],
+  "changed_files": [
+    "crates/revdeck-cli/src/main.rs",
+    "tests/commands/Cargo.toml",
+    "tests/commands/tests/command_pipeline.rs",
+    "README.md"
+  ],
+  "convergence": {
+    "criteria": [
+      "revdeck search <project> <query> opens an existing project and reuses ObjectQueryRepository::search_objects",
+      "--kind normalizes dashed kind names to snake_case ObjectKind values",
+      "--json emits stable refs, labels, metadata, addresses, and sizes",
+      "text output is useful for copy/paste into inspect or TUI commands"
+    ]
+  }
+}

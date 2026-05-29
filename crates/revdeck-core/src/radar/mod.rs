@@ -12,6 +12,100 @@ pub const SIGNAL_FUNCTION_SIZE: &str = "function_size";
 pub const SIGNAL_CALL_COUNT: &str = "call_count";
 pub const SIGNAL_XREF_COUNT: &str = "xref_count";
 pub const SIGNAL_ANALYST_TAG: &str = "analyst_tag";
+pub const SIGNAL_IMPORT_FAMILY: &str = "import_family";
+pub const SIGNAL_STRING_SIGNAL: &str = "string_signal";
+pub const SIGNAL_KNOWN_LIBRARY_BASELINE: &str = "known_library_baseline";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportFamily {
+    Process,
+    Filesystem,
+    Registry,
+    Network,
+    Crypto,
+    Memory,
+    Loader,
+    Ui,
+    Libc,
+    Uncategorized,
+}
+
+impl ImportFamily {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Process => "process",
+            Self::Filesystem => "filesystem",
+            Self::Registry => "registry",
+            Self::Network => "network",
+            Self::Crypto => "crypto",
+            Self::Memory => "memory",
+            Self::Loader => "loader",
+            Self::Ui => "ui",
+            Self::Libc => "libc",
+            Self::Uncategorized => "uncategorized",
+        }
+    }
+
+    pub const fn radar_contribution(self) -> i32 {
+        match self {
+            Self::Process => 10,
+            Self::Network => 10,
+            Self::Crypto => 8,
+            Self::Registry => 7,
+            Self::Memory => 6,
+            Self::Loader => 6,
+            Self::Filesystem => 5,
+            Self::Libc => 3,
+            Self::Ui | Self::Uncategorized => 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StringSignal {
+    Url,
+    FilePath,
+    RegistryKey,
+    Command,
+    Credential,
+    FormatString,
+    UiText,
+    Debug,
+    Noise,
+    Other,
+}
+
+impl StringSignal {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Url => "url",
+            Self::FilePath => "file_path",
+            Self::RegistryKey => "registry_key",
+            Self::Command => "command",
+            Self::Credential => "credential",
+            Self::FormatString => "format_string",
+            Self::UiText => "ui_text",
+            Self::Debug => "debug",
+            Self::Noise => "noise",
+            Self::Other => "other",
+        }
+    }
+
+    pub const fn radar_contribution(self) -> i32 {
+        match self {
+            Self::Credential => 25,
+            Self::Command => 18,
+            Self::Url => 14,
+            Self::RegistryKey => 10,
+            Self::FilePath => 8,
+            Self::FormatString => 6,
+            Self::Debug => 4,
+            Self::UiText | Self::Noise | Self::Other => 0,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RadarEvidence {
@@ -20,6 +114,127 @@ pub struct RadarEvidence {
     pub value: String,
     pub address: Option<u64>,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KnownLibraryBaselineHit {
+    pub signature_id: String,
+    pub label: String,
+    pub category: String,
+    pub confidence: f64,
+    pub score_adjustment: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct KnownLibrarySignature {
+    signature_id: &'static str,
+    name: &'static str,
+    label: &'static str,
+    category: &'static str,
+    confidence: f64,
+    score_adjustment: i32,
+}
+
+const KNOWN_LIBRARY_NAME_SIGNATURES: &[KnownLibrarySignature] = &[
+    KnownLibrarySignature {
+        signature_id: "elf.runtime._start",
+        name: "_start",
+        label: "ELF runtime entry stub",
+        category: "runtime",
+        confidence: 0.90,
+        score_adjustment: -18,
+    },
+    KnownLibrarySignature {
+        signature_id: "elf.runtime.__libc_start_main",
+        name: "__libc_start_main",
+        label: "libc process bootstrap",
+        category: "runtime",
+        confidence: 0.92,
+        score_adjustment: -18,
+    },
+    KnownLibrarySignature {
+        signature_id: "elf.runtime.deregister_tm_clones",
+        name: "deregister_tm_clones",
+        label: "GCC transactional memory clone cleanup",
+        category: "compiler_runtime",
+        confidence: 0.95,
+        score_adjustment: -20,
+    },
+    KnownLibrarySignature {
+        signature_id: "elf.runtime.register_tm_clones",
+        name: "register_tm_clones",
+        label: "GCC transactional memory clone setup",
+        category: "compiler_runtime",
+        confidence: 0.95,
+        score_adjustment: -20,
+    },
+    KnownLibrarySignature {
+        signature_id: "elf.runtime.__do_global_dtors_aux",
+        name: "__do_global_dtors_aux",
+        label: "GCC global destructor helper",
+        category: "compiler_runtime",
+        confidence: 0.95,
+        score_adjustment: -20,
+    },
+    KnownLibrarySignature {
+        signature_id: "elf.runtime.frame_dummy",
+        name: "frame_dummy",
+        label: "GCC frame registration helper",
+        category: "compiler_runtime",
+        confidence: 0.93,
+        score_adjustment: -16,
+    },
+    KnownLibrarySignature {
+        signature_id: "elf.runtime._init",
+        name: "_init",
+        label: "ELF init stub",
+        category: "runtime",
+        confidence: 0.88,
+        score_adjustment: -12,
+    },
+    KnownLibrarySignature {
+        signature_id: "elf.runtime._fini",
+        name: "_fini",
+        label: "ELF fini stub",
+        category: "runtime",
+        confidence: 0.88,
+        score_adjustment: -12,
+    },
+    KnownLibrarySignature {
+        signature_id: "msvc.runtime.__security_init_cookie",
+        name: "__security_init_cookie",
+        label: "MSVC security cookie initialization",
+        category: "compiler_runtime",
+        confidence: 0.90,
+        score_adjustment: -14,
+    },
+    KnownLibrarySignature {
+        signature_id: "msvc.runtime._scrt_common_main",
+        name: "_scrt_common_main",
+        label: "MSVC CRT main bootstrap",
+        category: "runtime",
+        confidence: 0.90,
+        score_adjustment: -14,
+    },
+];
+
+const COMMON_RUNTIME_IMPORTS: &[&str] = &[
+    "__libc_start_main",
+    "__cxa_finalize",
+    "atexit",
+    "exit",
+    "malloc",
+    "free",
+    "memcpy",
+    "memmove",
+    "memset",
+    "strlen",
+    "strcmp",
+    "strncmp",
+    "printf",
+    "fprintf",
+    "puts",
+    "putchar",
+];
 
 impl RadarEvidence {
     pub fn new(object_ref: ObjectRef, label: impl Into<String>, value: impl Into<String>) -> Self {
@@ -209,6 +424,22 @@ pub fn score_function(input: FunctionScoreInput) -> FunctionScore {
             .then_with(|| left.object_ref.cmp(&right.object_ref))
     });
     for import in imports {
+        let family = classify_import_family(&import.label, &import.value);
+        let family_contribution = family.radar_contribution();
+        if family_contribution > 0 {
+            reasons.push(
+                ScoreReason::new(
+                    SIGNAL_IMPORT_FAMILY,
+                    reason_code(SIGNAL_IMPORT_FAMILY, family.as_str()),
+                    format!("Import family {} via {}", family.as_str(), import.label),
+                    family_contribution,
+                    family_contribution,
+                    vec![import.object_ref.clone()],
+                )
+                .with_metadata("family", family.as_str())
+                .with_metadata("value", import.value.clone()),
+            );
+        }
         if let Some(matched) = dangerous_import_match(&import.value) {
             reasons.push(
                 ScoreReason::new(
@@ -232,6 +463,22 @@ pub fn score_function(input: FunctionScoreInput) -> FunctionScore {
             .then_with(|| left.object_ref.cmp(&right.object_ref))
     });
     for string in strings {
+        let signal = classify_string_signal(&string.value);
+        let signal_contribution = signal.radar_contribution();
+        if signal_contribution > 0 {
+            reasons.push(
+                ScoreReason::new(
+                    SIGNAL_STRING_SIGNAL,
+                    reason_code(SIGNAL_STRING_SIGNAL, signal.as_str()),
+                    format!("String signal {} in {}", signal.as_str(), string.label),
+                    signal_contribution,
+                    signal_contribution,
+                    vec![string.object_ref.clone()],
+                )
+                .with_metadata("signal", signal.as_str())
+                .with_metadata("value", string.value.clone()),
+            );
+        }
         if let Some(matched) = sensitive_string_match(&string.value) {
             reasons.push(
                 ScoreReason::new(
@@ -279,6 +526,22 @@ pub fn score_function(input: FunctionScoreInput) -> FunctionScore {
 
     if let Some(reason) = boundary_confidence_reason(&input) {
         reasons.push(reason);
+    }
+
+    for hit in classify_known_library_baseline(&input) {
+        reasons.push(
+            ScoreReason::new(
+                SIGNAL_KNOWN_LIBRARY_BASELINE,
+                reason_code(SIGNAL_KNOWN_LIBRARY_BASELINE, &hit.signature_id),
+                hit.label.clone(),
+                hit.score_adjustment,
+                hit.score_adjustment.abs(),
+                vec![input.function_ref.clone()],
+            )
+            .with_metadata("signature_id", hit.signature_id)
+            .with_metadata("category", hit.category)
+            .with_metadata("confidence", format!("{:.2}", hit.confidence)),
+        );
     }
 
     if let Some(size) = input.size {
@@ -427,6 +690,119 @@ pub fn dangerous_import_match(value: &str) -> Option<&'static str> {
     .find(|needle| lower.contains(needle))
 }
 
+pub fn classify_import_family(label: &str, value: &str) -> ImportFamily {
+    let lower = format!("{label}!{value}").to_ascii_lowercase();
+    if contains_any(
+        &lower,
+        &["regopen", "regset", "regquery", "regdelete", "registry"],
+    ) {
+        ImportFamily::Registry
+    } else if contains_any(
+        &lower,
+        &[
+            "createprocess",
+            "shellexecute",
+            "winexec",
+            "system",
+            "popen",
+            "exec",
+            "fork",
+            "spawn",
+            "terminateprocess",
+            "openprocess",
+        ],
+    ) {
+        ImportFamily::Process
+    } else if contains_any(
+        &lower,
+        &[
+            "createfile",
+            "readfile",
+            "writefile",
+            "deletefile",
+            "copyfile",
+            "movefile",
+            "findfirstfile",
+            "fopen",
+            "fread",
+            "fwrite",
+            "open",
+            "read",
+            "write",
+        ],
+    ) {
+        ImportFamily::Filesystem
+    } else if contains_any(
+        &lower,
+        &[
+            "socket",
+            "connect",
+            "send",
+            "recv",
+            "internet",
+            "winhttp",
+            "wsastartup",
+            "getaddrinfo",
+            "urlmon",
+        ],
+    ) {
+        ImportFamily::Network
+    } else if contains_any(
+        &lower,
+        &[
+            "crypt", "bcrypt", "cert", "hash", "encrypt", "decrypt", "ssl", "tls",
+        ],
+    ) {
+        ImportFamily::Crypto
+    } else if contains_any(
+        &lower,
+        &[
+            "virtualalloc",
+            "virtualprotect",
+            "heapalloc",
+            "rtlmove",
+            "memcpy",
+            "memset",
+            "malloc",
+            "free",
+        ],
+    ) {
+        ImportFamily::Memory
+    } else if contains_any(
+        &lower,
+        &[
+            "loadlibrary",
+            "getprocaddress",
+            "dlopen",
+            "dlsym",
+            "ldrload",
+        ],
+    ) {
+        ImportFamily::Loader
+    } else if contains_any(
+        &lower,
+        &[
+            "user32",
+            "messagebox",
+            "createwindow",
+            "dialog",
+            "dispatchmessage",
+            "getmessage",
+        ],
+    ) {
+        ImportFamily::Ui
+    } else if contains_any(
+        &lower,
+        &[
+            "libc", "msvcrt", "printf", "scanf", "strlen", "strcmp", "strcpy",
+        ],
+    ) {
+        ImportFamily::Libc
+    } else {
+        ImportFamily::Uncategorized
+    }
+}
+
 pub fn sensitive_string_match(value: &str) -> Option<&'static str> {
     let lower = value.to_ascii_lowercase();
     [
@@ -435,6 +811,147 @@ pub fn sensitive_string_match(value: &str) -> Option<&'static str> {
     ]
     .into_iter()
     .find(|needle| lower.contains(needle))
+}
+
+pub fn classify_string_signal(value: &str) -> StringSignal {
+    let trimmed = value.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if trimmed.is_empty() || trimmed.len() <= 2 {
+        StringSignal::Noise
+    } else if lower.starts_with("http://") || lower.starts_with("https://") {
+        StringSignal::Url
+    } else if lower.starts_with("hkey_")
+        || lower.starts_with("hkcu\\")
+        || lower.starts_with("hklm\\")
+        || lower.contains("\\software\\")
+    {
+        StringSignal::RegistryKey
+    } else if contains_any(
+        &lower,
+        &[
+            "password",
+            "passwd",
+            "token",
+            "secret",
+            "credential",
+            "api_key",
+            "apikey",
+        ],
+    ) {
+        StringSignal::Credential
+    } else if contains_any(
+        &lower,
+        &[
+            "cmd.exe",
+            "powershell",
+            "/bin/sh",
+            "/bin/bash",
+            "rundll32",
+            "regsvr32",
+        ],
+    ) {
+        StringSignal::Command
+    } else if looks_like_path(trimmed) {
+        StringSignal::FilePath
+    } else if looks_like_format_string(trimmed) {
+        StringSignal::FormatString
+    } else if contains_any(&lower, &["debug", "trace", "assert", "error:", "warning:"]) {
+        StringSignal::Debug
+    } else if looks_like_ui_text(trimmed) {
+        StringSignal::UiText
+    } else {
+        StringSignal::Other
+    }
+}
+
+pub fn classify_known_library_baseline(input: &FunctionScoreInput) -> Vec<KnownLibraryBaselineHit> {
+    let normalized_name = normalize_symbol_name(&input.name);
+    let mut hits = Vec::new();
+    for signature in KNOWN_LIBRARY_NAME_SIGNATURES {
+        if normalized_name == normalize_symbol_name(signature.name) {
+            hits.push(KnownLibraryBaselineHit {
+                signature_id: signature.signature_id.to_string(),
+                label: signature.label.to_string(),
+                category: signature.category.to_string(),
+                confidence: signature.confidence,
+                score_adjustment: signature.score_adjustment,
+            });
+        }
+    }
+
+    let runtime_import_count = input
+        .called_imports
+        .iter()
+        .filter(|import| {
+            let symbol = normalize_symbol_name(&import.value);
+            COMMON_RUNTIME_IMPORTS
+                .iter()
+                .any(|candidate| symbol == normalize_symbol_name(candidate))
+        })
+        .count();
+    if runtime_import_count >= 3
+        && input
+            .called_imports
+            .iter()
+            .all(|import| dangerous_import_match(&import.value).is_none())
+    {
+        hits.push(KnownLibraryBaselineHit {
+            signature_id: "runtime.common_import_cluster".to_string(),
+            label: "Common runtime import cluster".to_string(),
+            category: "runtime_imports".to_string(),
+            confidence: 0.70,
+            score_adjustment: -8,
+        });
+    }
+
+    hits
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
+}
+
+fn looks_like_path(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.contains(":\\")
+        || lower.starts_with("\\\\")
+        || lower.starts_with('/')
+        || lower.contains("\\windows\\")
+        || lower.contains("\\system32\\")
+        || lower.ends_with(".dll")
+        || lower.ends_with(".exe")
+        || lower.ends_with(".sys")
+        || lower.ends_with(".ini")
+        || lower.ends_with(".json")
+}
+
+fn looks_like_format_string(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.iter().enumerate().any(|(index, byte)| {
+        if *byte != b'%' {
+            return false;
+        }
+        let mut cursor = index + 1;
+        while cursor < bytes.len()
+            && matches!(
+                bytes[cursor],
+                b'0'..=b'9' | b'.' | b'-' | b'+' | b'#' | b' ' | b'l' | b'h' | b'z' | b't'
+            )
+        {
+            cursor += 1;
+        }
+        cursor < bytes.len()
+            && matches!(
+                bytes[cursor].to_ascii_lowercase(),
+                b's' | b'd' | b'i' | b'u' | b'x' | b'p' | b'f' | b'c'
+            )
+    })
+}
+
+fn looks_like_ui_text(value: &str) -> bool {
+    let alpha = value.chars().filter(|ch| ch.is_alphabetic()).count();
+    let whitespace = value.chars().filter(|ch| ch.is_whitespace()).count();
+    alpha >= 4 && (whitespace > 0 || value.chars().any(|ch| ch.is_uppercase()))
 }
 
 fn boundary_confidence_reason(input: &FunctionScoreInput) -> Option<ScoreReason> {
@@ -480,6 +997,10 @@ fn normalize_tags(tags: &[String]) -> Vec<String> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+fn normalize_symbol_name(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
 }
 
 fn sort_reasons(reasons: &mut [ScoreReason]) {
@@ -614,6 +1135,165 @@ mod tests {
             .any(|reason| reason.reason_code == "sensitive_string.password"
                 && reason.contribution == 25
                 && reason.evidence_refs[0].kind == ObjectKind::String));
+    }
+
+    #[test]
+    fn import_family_classifier_covers_common_win32_and_libc_groups() {
+        assert_eq!(
+            classify_import_family("KERNEL32.dll", "CreateProcessW"),
+            ImportFamily::Process
+        );
+        assert_eq!(
+            classify_import_family("KERNEL32.dll", "CreateFileW"),
+            ImportFamily::Filesystem
+        );
+        assert_eq!(
+            classify_import_family("ADVAPI32.dll", "RegOpenKeyExW"),
+            ImportFamily::Registry
+        );
+        assert_eq!(
+            classify_import_family("WS2_32.dll", "connect"),
+            ImportFamily::Network
+        );
+        assert_eq!(
+            classify_import_family("BCRYPT.dll", "BCryptEncrypt"),
+            ImportFamily::Crypto
+        );
+        assert_eq!(
+            classify_import_family("KERNEL32.dll", "VirtualAlloc"),
+            ImportFamily::Memory
+        );
+        assert_eq!(
+            classify_import_family("KERNEL32.dll", "LoadLibraryW"),
+            ImportFamily::Loader
+        );
+        assert_eq!(
+            classify_import_family("USER32.dll", "MessageBoxW"),
+            ImportFamily::Ui
+        );
+        assert_eq!(
+            classify_import_family("libc.so.6", "printf"),
+            ImportFamily::Libc
+        );
+        assert_eq!(
+            classify_import_family("unknown.dll", "PlainSymbol"),
+            ImportFamily::Uncategorized
+        );
+    }
+
+    #[test]
+    fn string_signal_classifier_covers_high_value_and_low_value_strings() {
+        assert_eq!(
+            classify_string_signal("https://example.invalid/api"),
+            StringSignal::Url
+        );
+        assert_eq!(
+            classify_string_signal("C:\\Windows\\System32\\notepad.exe"),
+            StringSignal::FilePath
+        );
+        assert_eq!(
+            classify_string_signal("HKEY_CURRENT_USER\\Software\\Vendor"),
+            StringSignal::RegistryKey
+        );
+        assert_eq!(
+            classify_string_signal("cmd.exe /c whoami"),
+            StringSignal::Command
+        );
+        assert_eq!(
+            classify_string_signal("admin password token"),
+            StringSignal::Credential
+        );
+        assert_eq!(
+            classify_string_signal("value=%08x"),
+            StringSignal::FormatString
+        );
+        assert_eq!(classify_string_signal("Open File"), StringSignal::UiText);
+        assert_eq!(
+            classify_string_signal("debug trace line"),
+            StringSignal::Debug
+        );
+        assert_eq!(classify_string_signal("ok"), StringSignal::Noise);
+    }
+
+    #[test]
+    fn radar_adds_family_and_string_signal_reasons_without_replacing_existing_signals() {
+        let mut input = input("main", 0x401000);
+        input.called_imports.push(RadarEvidence::new(
+            import("CreateProcessW").object_ref,
+            "KERNEL32!CreateProcessW",
+            "CreateProcessW",
+        ));
+        input
+            .referenced_strings
+            .push(string("https://example.invalid/c2"));
+
+        let score = score_function(input);
+
+        assert!(score.reasons.iter().any(|reason| {
+            reason.signal_key == SIGNAL_IMPORT_FAMILY
+                && reason.metadata.get("family").map(String::as_str) == Some("process")
+        }));
+        assert!(score.reasons.iter().any(|reason| {
+            reason.signal_key == SIGNAL_STRING_SIGNAL
+                && reason.metadata.get("signal").map(String::as_str) == Some("url")
+        }));
+        assert!(score
+            .reasons
+            .iter()
+            .any(|reason| reason.signal_key == SIGNAL_SENSITIVE_STRING));
+    }
+
+    #[test]
+    fn known_library_baseline_marks_common_runtime_without_hiding_dangerous_imports() {
+        let mut runtime = input("__libc_start_main", 0x401100);
+        runtime.size = Some(64);
+        let runtime_score = score_function(runtime);
+
+        let baseline_reason = runtime_score
+            .reasons
+            .iter()
+            .find(|reason| reason.signal_key == SIGNAL_KNOWN_LIBRARY_BASELINE)
+            .expect("runtime function should have a known-library baseline reason");
+        assert!(baseline_reason.contribution < 0);
+        assert_eq!(
+            baseline_reason
+                .metadata
+                .get("signature_id")
+                .map(String::as_str),
+            Some("elf.runtime.__libc_start_main")
+        );
+
+        let mut dangerous = input("runtime_wrapper", 0x401200);
+        dangerous.called_imports.push(import("system"));
+        dangerous.called_imports.push(import("__libc_start_main"));
+        dangerous.called_imports.push(import("printf"));
+        dangerous.called_imports.push(import("strlen"));
+        let dangerous_score = score_function(dangerous);
+
+        assert!(dangerous_score.score >= 40);
+        assert!(dangerous_score
+            .reasons
+            .iter()
+            .any(|reason| reason.signal_key == SIGNAL_DANGEROUS_IMPORT));
+        assert!(!dangerous_score.reasons.iter().any(|reason| {
+            reason.reason_code == "known_library_baseline.runtime_common_import_cluster"
+        }));
+    }
+
+    #[test]
+    fn known_library_baseline_cluster_lowers_common_library_noise_only() {
+        let mut input = input("helper", 0x401300);
+        input.called_imports.push(import("printf"));
+        input.called_imports.push(import("strlen"));
+        input.called_imports.push(import("memcpy"));
+
+        let score = score_function(input);
+
+        assert!(score.reasons.iter().any(|reason| {
+            reason.signal_key == SIGNAL_KNOWN_LIBRARY_BASELINE
+                && reason.contribution < 0
+                && reason.metadata.get("category").map(String::as_str) == Some("runtime_imports")
+        }));
     }
 
     #[test]

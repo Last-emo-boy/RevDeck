@@ -1,0 +1,25 @@
+{
+  "id": "TASK-002",
+  "title": "CLI object inspect",
+  "status": "completed",
+  "purpose": "Complete the shell workflow after search by letting users inspect one object and its bounded relation context using a stable object ref.",
+  "read_first": [
+    "crates/revdeck-cli/src/main.rs",
+    "crates/revdeck-core/src/object.rs",
+    "crates/revdeck-core/src/query/mod.rs",
+    "crates/revdeck-db/src/query.rs"
+  ],
+  "changed_files": [
+    "crates/revdeck-cli/src/main.rs",
+    "tests/commands/tests/command_pipeline.rs",
+    "README.md"
+  ],
+  "convergence": {
+    "criteria": [
+      "revdeck inspect <project> <object-ref> parses ObjectRef directly",
+      "missing objects fail before rendering",
+      "--relations bounds relation output",
+      "--json includes object and relation arrays for automation"
+    ]
+  }
+}

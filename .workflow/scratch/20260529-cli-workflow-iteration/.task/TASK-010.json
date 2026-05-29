@@ -1,0 +1,32 @@
+{
+  "id": "TASK-010",
+  "title": "Signature and known-library baseline",
+  "status": "completed",
+  "purpose": "Reduce triage noise by recognizing common runtime/library patterns and lowering priority for likely boilerplate.",
+  "read_first": [
+    "crates/revdeck-core/src/radar/mod.rs",
+    "crates/revdeck-index/src/lib.rs",
+    "fixtures/manifest.json",
+    "tests/radar/tests/radar_fixture.rs"
+  ],
+  "files": [
+    "crates/revdeck-core/src/radar/mod.rs",
+    "crates/revdeck-index/src/lib.rs",
+    "tests/radar/tests/radar_fixture.rs",
+    "README.md"
+  ],
+  "actions": [
+    "Define first-party signature records for runtime/library indicators",
+    "Attach signature labels to objects or radar inputs",
+    "Document that this is not IDA FLIRT parity",
+    "Add fixture tests for recognized and unknown patterns"
+  ],
+  "convergence": {
+    "criteria": [
+      "Known-library hits are visible as confidence metadata",
+      "Risk scoring remains conservative for dangerous imports",
+      "Unknown code is not suppressed",
+      "Tests verify boilerplate does not dominate top radar rows"
+    ]
+  }
+}

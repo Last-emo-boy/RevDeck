@@ -2,7 +2,8 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use revdeck_db::ProjectDatabase;
 use revdeck_plugin_host::{
-    commit_plugin_directory, run_plugin_directory, test_plugin_directory, validate_manifest_file,
+    commit_plugin_directory, run_plugin_directory, scaffold_plugin_directory,
+    test_plugin_directory, validate_manifest_file,
 };
 use revdeck_plugin_sdk::{CapabilityKind, PermissionSet, PluginManifest};
 use std::{path::PathBuf, sync::Once};
@@ -75,6 +76,30 @@ fn plugin_directory_test_validates_object_batch() {
         .attribute_namespaces
         .contains(&"com.revdeck.examples.valid-minimal.report".to_string()));
     assert_eq!(dry_run.touched_labs, vec!["plugin"]);
+}
+
+#[test]
+fn plugin_scaffold_generates_valid_fixture_replay_plugin() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("scaffolded");
+    let output = scaffold_plugin_directory(&plugin_dir, "com.revdeck.examples.scaffolded", false)
+        .expect("scaffold plugin");
+
+    assert_eq!(output.status, "scaffolded");
+    assert_eq!(output.plugin_id, "com.revdeck.examples.scaffolded");
+    assert!(plugin_dir.join("revdeck-plugin.toml").exists());
+    assert!(plugin_dir.join("object-batch.json").exists());
+    assert!(output.validation.is_valid());
+
+    let test = test_plugin_directory(&plugin_dir).unwrap();
+    assert_eq!(test.status, "succeeded");
+    assert_eq!(test.object_batch.unwrap().objects, 1);
+    assert_eq!(test.dry_run.unwrap().touched_labs, vec!["plugin"]);
+
+    let overwrite =
+        scaffold_plugin_directory(&plugin_dir, "com.revdeck.examples.scaffolded", false)
+            .expect_err("scaffold should not overwrite without force");
+    assert!(overwrite.to_string().contains("would overwrite"));
 }
 
 #[test]
@@ -221,6 +246,31 @@ fn cli_plugin_validate_inspect_and_test() {
         .stdout(predicate::str::contains("\"objects\": 3"))
         .stdout(predicate::str::contains("\"dry_run\""))
         .stdout(predicate::str::contains("\"plugin_contribution\""));
+}
+
+#[test]
+fn cli_plugin_scaffold_outputs_valid_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("cli-scaffolded");
+    Command::new(revdeck_bin())
+        .args([
+            "plugin",
+            "scaffold",
+            plugin_dir.to_str().unwrap(),
+            "--id",
+            "com.revdeck.examples.cli-scaffolded",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"status\": \"scaffolded\""))
+        .stdout(predicate::str::contains("revdeck-plugin.toml"))
+        .stdout(predicate::str::contains("object-batch.json"));
+
+    Command::new(revdeck_bin())
+        .args(["plugin", "test", plugin_dir.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"objects\": 1"));
 }
 
 #[test]

@@ -1,7 +1,8 @@
 use revdeck_core::{NewAnalysisRun, ObjectKind, ObjectRef, StableObjectKey};
 use revdeck_db::{
     migrations::current_version, AnalysisJobRepository, AnalysisRunRepository, ArtifactRecord,
-    ArtifactRepository, IndexRepository, ObjectRepository, ProjectDatabase, StoredObject,
+    ArtifactRepository, IndexRepository, ObjectRepository, ProjectDatabase,
+    ProjectMetadataRepository, StoredObject,
 };
 use revdeck_index::{register_binary_for_analysis, AnalysisProfile, ImportOptions};
 use std::path::PathBuf;
@@ -107,6 +108,53 @@ fn project_creation_reopen_and_foundation_records_are_deterministic() {
             .object_ref,
         function_ref
     );
+}
+
+#[test]
+fn project_metadata_and_notes_survive_reopen_and_export_context() {
+    let temp = tempdir().unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    let repo = ProjectMetadataRepository::new(project.connection());
+    repo.set_metadata(
+        "target.name",
+        "notepad.exe",
+        datetime!(2026-05-29 00:01 UTC),
+    )
+    .unwrap();
+    repo.add_note(
+        "assumption",
+        "Local sample",
+        "Analyst used a local Notepad-like fixture.",
+        datetime!(2026-05-29 00:02 UTC),
+    )
+    .unwrap();
+    drop(project);
+
+    let reopened = ProjectDatabase::open_existing(temp.path()).unwrap();
+    let repo = ProjectMetadataRepository::new(reopened.connection());
+    assert_eq!(
+        repo.get_metadata("target.name").unwrap().unwrap().value,
+        "notepad.exe"
+    );
+    let notes = repo.list_notes(10).unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].category, "assumption");
+
+    let context = revdeck_db::FindingRepository::new(reopened.connection())
+        .export_context(datetime!(2026-05-29 00:03 UTC))
+        .unwrap();
+    assert_eq!(context.case_metadata[0].key, "target.name");
+    assert_eq!(context.case_notes[0].title, "Local sample");
+}
+
+#[test]
+fn project_metadata_rejects_empty_keys() {
+    let temp = tempdir().unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    let err = ProjectMetadataRepository::new(project.connection())
+        .set_metadata("", "value", datetime!(2026-05-29 00:01 UTC))
+        .unwrap_err();
+    assert!(err.to_string().contains("metadata key"));
 }
 
 #[test]

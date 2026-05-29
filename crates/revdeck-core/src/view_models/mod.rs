@@ -1,6 +1,7 @@
 use crate::radar::{
-    evidence_kind_label, filter_function_scores, format_address, FunctionRadarFilter,
-    FunctionScore, ScoreReason, SIGNAL_DANGEROUS_IMPORT, SIGNAL_SENSITIVE_STRING,
+    dangerous_import_match, evidence_kind_label, filter_function_scores, format_address,
+    sensitive_string_match, FunctionRadarFilter, FunctionScore, ScoreReason,
+    SIGNAL_DANGEROUS_IMPORT, SIGNAL_SENSITIVE_STRING,
 };
 use crate::{
     AnalysisRunStatus, EdgeKind, EvidencePathItem, LabDescriptor, LabMaturity, LocalTraversal,
@@ -1191,6 +1192,15 @@ pub struct DiffRow {
     pub before_label: Option<String>,
     pub after_label: Option<String>,
     pub command_previews: Vec<String>,
+    pub risk_level: Option<String>,
+    pub risk_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffRiskSummary {
+    pub high_risk_rows: usize,
+    pub dangerous_import_deltas: usize,
+    pub sensitive_string_deltas: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1205,6 +1215,7 @@ pub struct DiffSummaryViewModel {
     pub unchanged: usize,
     pub object_deltas: usize,
     pub relation_deltas: usize,
+    pub risk_summary: DiffRiskSummary,
     pub rows: Vec<DiffRow>,
 }
 
@@ -1242,6 +1253,7 @@ impl DiffSummaryViewModel {
             .iter()
             .filter(|row| row.entity_kind == DiffEntityKind::Relation)
             .count();
+        let risk_summary = DiffRiskSummary::from_rows(&rows);
 
         Self {
             before_artifact: before.artifact.clone(),
@@ -1254,12 +1266,37 @@ impl DiffSummaryViewModel {
             unchanged,
             object_deltas,
             relation_deltas,
+            risk_summary,
             rows,
         }
     }
 
     pub fn total_deltas(&self) -> usize {
         self.rows.len()
+    }
+}
+
+impl DiffRiskSummary {
+    fn from_rows(rows: &[DiffRow]) -> Self {
+        Self {
+            high_risk_rows: rows.iter().filter(|row| row.risk_level.is_some()).count(),
+            dangerous_import_deltas: rows
+                .iter()
+                .filter(|row| {
+                    row.risk_reasons
+                        .iter()
+                        .any(|reason| reason.starts_with("dangerous_import:"))
+                })
+                .count(),
+            sensitive_string_deltas: rows
+                .iter()
+                .filter(|row| {
+                    row.risk_reasons
+                        .iter()
+                        .any(|reason| reason.starts_with("sensitive_string:"))
+                })
+                .count(),
+        }
     }
 }
 
@@ -1385,6 +1422,8 @@ fn diff_object_row(
         .map(|object| object.display_label.as_str())
         .unwrap_or(match_key);
     let title = format!("{} object {label}", change.as_str());
+    let risk_reasons = diff_object_risk_reasons(before, after);
+    let risk_level = diff_risk_level(&risk_reasons);
     DiffRow {
         delta_ref: diff_delta_ref(artifact, DiffEntityKind::Object, change, match_key),
         entity_kind: DiffEntityKind::Object,
@@ -1396,6 +1435,8 @@ fn diff_object_row(
         before_label: before.map(|object| object.display_label.clone()),
         after_label: after.map(|object| object.display_label.clone()),
         command_previews: diff_command_previews(before_ref.as_ref(), after_ref.as_ref()),
+        risk_level,
+        risk_reasons,
     }
 }
 
@@ -1420,6 +1461,8 @@ fn diff_relation_row(
         })
         .unwrap_or_else(|| match_key.to_string());
     let title = format!("{} relation {label}", change.as_str());
+    let risk_reasons = diff_relation_risk_reasons(match_key, before, after);
+    let risk_level = diff_risk_level(&risk_reasons);
     DiffRow {
         delta_ref: diff_delta_ref(artifact, DiffEntityKind::Relation, change, match_key),
         entity_kind: DiffEntityKind::Relation,
@@ -1431,6 +1474,64 @@ fn diff_relation_row(
         before_label: before.map(|relation| diff_relation_label(relation)),
         after_label: after.map(|relation| diff_relation_label(relation)),
         command_previews: diff_command_previews(before_ref.as_ref(), after_ref.as_ref()),
+        risk_level,
+        risk_reasons,
+    }
+}
+
+fn diff_object_risk_reasons(
+    before: Option<&DiffComparableObject>,
+    after: Option<&DiffComparableObject>,
+) -> Vec<String> {
+    let mut reasons = Vec::new();
+    for object in before.into_iter().chain(after.into_iter()) {
+        let haystack = format!("{} {}", object.display_label, object.fingerprint);
+        match object.kind {
+            ObjectKind::Import => {
+                if let Some(matched) = dangerous_import_match(&haystack) {
+                    reasons.push(format!("dangerous_import:{matched}"));
+                }
+            }
+            ObjectKind::String => {
+                if let Some(matched) = sensitive_string_match(&haystack) {
+                    reasons.push(format!("sensitive_string:{matched}"));
+                }
+            }
+            _ => {}
+        }
+    }
+    reasons.sort();
+    reasons.dedup();
+    reasons
+}
+
+fn diff_relation_risk_reasons(
+    match_key: &str,
+    before: Option<&DiffComparableRelation>,
+    after: Option<&DiffComparableRelation>,
+) -> Vec<String> {
+    let mut haystack = match_key.to_string();
+    for relation in before.into_iter().chain(after.into_iter()) {
+        haystack.push(' ');
+        haystack.push_str(&relation.fingerprint);
+    }
+    let mut reasons = Vec::new();
+    if let Some(matched) = dangerous_import_match(&haystack) {
+        reasons.push(format!("dangerous_import:{matched}"));
+    }
+    if let Some(matched) = sensitive_string_match(&haystack) {
+        reasons.push(format!("sensitive_string:{matched}"));
+    }
+    reasons.sort();
+    reasons.dedup();
+    reasons
+}
+
+fn diff_risk_level(reasons: &[String]) -> Option<String> {
+    if reasons.is_empty() {
+        None
+    } else {
+        Some("high".to_string())
     }
 }
 

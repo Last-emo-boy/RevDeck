@@ -1,9 +1,10 @@
 use revdeck_core::{
     AnalysisRun, AnalysisRunStatus, Annotation, AnnotationEvidence, AnnotationKind, ArtifactFormat,
-    ArtifactKind, DiffSummaryViewModel, EdgeKind, ExportAnalysisJob, ExportContext,
-    ExportPluginRun, Finding, FindingEvidence, FindingSeverity, FindingStatus, FunctionScore,
-    FunctionScoreInput, HexOffsetMappingRange, ImportStatus, NewAnalysisRun, ObjectKind, ObjectRef,
-    RadarEvidence, Report, ScoreReason, StableObjectKey, FUNCTION_RADAR_SCORE_KIND,
+    ArtifactKind, DiffSummaryViewModel, EdgeKind, ExportAnalysisJob, ExportCaseMetadata,
+    ExportCaseNote, ExportContext, ExportPluginRun, Finding, FindingEvidence, FindingSeverity,
+    FindingStatus, FunctionScore, FunctionScoreInput, HexOffsetMappingRange, ImportStatus,
+    NewAnalysisRun, ObjectKind, ObjectRef, RadarEvidence, Report, ScoreReason, StableObjectKey,
+    FUNCTION_RADAR_SCORE_KIND,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
@@ -76,6 +77,10 @@ pub struct PluginRunRepository<'conn> {
     connection: &'conn Connection,
 }
 
+pub struct ProjectMetadataRepository<'conn> {
+    connection: &'conn Connection,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredEdge {
     pub edge_ref: ObjectRef,
@@ -115,6 +120,23 @@ pub struct PluginRunRecord {
     pub diagnostics_json: String,
     pub started_at: OffsetDateTime,
     pub finished_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectMetadataRecord {
+    pub key: String,
+    pub value: String,
+    pub updated_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectNoteRecord {
+    pub note_id: i64,
+    pub category: String,
+    pub title: String,
+    pub body: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,6 +216,8 @@ pub struct TraceEventRecord {
     pub address: Option<u64>,
     pub message: String,
     pub correlated: Option<ObjectRef>,
+    pub correlation_method: String,
+    pub correlation_confidence: String,
     pub raw_json: String,
 }
 
@@ -263,6 +287,8 @@ pub struct CrashFrameRecord {
     pub source_location: Option<String>,
     pub confidence: String,
     pub correlated: Option<ObjectRef>,
+    pub correlation_method: String,
+    pub correlation_confidence: String,
     pub raw_json: String,
 }
 
@@ -348,6 +374,8 @@ struct ParsedTraceEvent {
     address: Option<u64>,
     message: String,
     correlated: Option<ObjectRef>,
+    correlation_method: String,
+    correlation_confidence: String,
     raw_json: String,
 }
 
@@ -386,7 +414,16 @@ struct ParsedCrashFrame {
     source_location: Option<String>,
     confidence: String,
     correlated: Option<ObjectRef>,
+    correlation_method: String,
+    correlation_confidence: String,
     raw_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FunctionCorrelation {
+    target: ObjectRef,
+    method: String,
+    confidence: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -768,7 +805,9 @@ impl<'conn> ObjectRepository<'conn> {
                 "after": row.after.as_ref().map(ToString::to_string),
                 "before_label": row.before_label.as_deref(),
                 "after_label": row.after_label.as_deref(),
-                "command_previews": &row.command_previews
+                "command_previews": &row.command_previews,
+                "risk_level": row.risk_level.as_deref(),
+                "risk_reasons": &row.risk_reasons
             }))
             .map_err(json_to_sql_error)?;
             self.upsert_object(&StoredObject {
@@ -1710,6 +1749,18 @@ impl<'conn> FindingRepository<'conn> {
             }
         }
 
+        let project_metadata = ProjectMetadataRepository::new(self.connection);
+        context.case_metadata = project_metadata
+            .list_metadata()?
+            .into_iter()
+            .map(export_case_metadata)
+            .collect();
+        context.case_notes = project_metadata
+            .list_notes(25)?
+            .into_iter()
+            .map(export_case_note)
+            .collect();
+
         context.refresh_lab_summaries();
         Ok(context)
     }
@@ -2606,12 +2657,25 @@ impl<'conn> FirmwareRepository<'conn> {
                 size: Some(file.size),
                 source_run_id: None,
                 metadata_json: serde_json::json!({
-                    "lab_id": "firmware",
+                        "lab_id": "firmware",
                     "parent_artifact": firmware.to_string(),
                     "source_file": file_ref.to_string(),
                     "path": file.relative_path,
                     "sha256": file.sha256,
-                    "file_type": file.file_type
+                    "file_type": file.file_type,
+                    "nested_artifact_summary": {
+                        "artifact": nested_artifact.to_string(),
+                        "source_file": file_ref.to_string(),
+                        "path": file.relative_path,
+                        "sha256": file.sha256,
+                        "size": file.size,
+                        "import_status": ImportStatus::Pending.as_str()
+                    },
+                    "command_previews": [
+                        format!(":open {nested_artifact}"),
+                        format!(":xrefs {nested_artifact}"),
+                        format!("revdeck inspect <project> {nested_artifact}")
+                    ]
                 })
                 .to_string(),
             })?;
@@ -2635,10 +2699,24 @@ impl<'conn> FirmwareRepository<'conn> {
                 "file_type": file.file_type,
                 "executable": file.executable,
                 "nested_artifact": file.nested_artifact.as_ref().map(ToString::to_string),
-                "command_previews": [
+                "nested_artifact_summary": file.nested_artifact.as_ref().map(|nested_artifact| serde_json::json!({
+                    "artifact": nested_artifact.to_string(),
+                    "path": file.relative_path,
+                    "sha256": file.sha256,
+                    "size": file.size,
+                    "file_type": file.file_type
+                })),
+                "command_previews": file.nested_artifact.as_ref().map(|nested_artifact| {
+                    vec![
+                        format!(":open {file_ref}"),
+                        format!(":open {nested_artifact}"),
+                        format!(":xrefs {nested_artifact}"),
+                        format!(":finding link <finding> {file_ref} evidence")
+                    ]
+                }).unwrap_or_else(|| vec![
                     format!(":open {file_ref}"),
                     format!(":finding link <finding> {file_ref} evidence")
-                ]
+                ])
             })
             .to_string(),
         })?;
@@ -2822,8 +2900,17 @@ impl<'conn> TraceRepository<'conn> {
             let message =
                 trace_string(&value, &["message", "summary"]).unwrap_or_else(|| event_kind.clone());
             let raw_json = serde_json::to_string(&value).map_err(json_to_sql_error)?;
-            let correlated =
+            let correlation =
                 self.correlate_function(artifact, address, function_name.as_deref())?;
+            let correlated = correlation.as_ref().map(|item| item.target.clone());
+            let correlation_method = correlation
+                .as_ref()
+                .map(|item| item.method.clone())
+                .unwrap_or_else(|| correlation_miss_reason(address, function_name.as_deref()));
+            let correlation_confidence = correlation
+                .as_ref()
+                .map(|item| item.confidence.clone())
+                .unwrap_or_else(|| "none".to_string());
 
             events.push(ParsedTraceEvent {
                 event_index,
@@ -2835,6 +2922,8 @@ impl<'conn> TraceRepository<'conn> {
                 address,
                 message,
                 correlated,
+                correlation_method,
+                correlation_confidence,
                 raw_json,
             });
         }
@@ -2852,12 +2941,25 @@ impl<'conn> TraceRepository<'conn> {
             &format!("session/{session_id}"),
         )
         .map_err(from_core_error)?;
+        let correlated_events = events
+            .iter()
+            .filter(|event| event.correlated.is_some())
+            .count() as u64;
+        let uncorrelated_events = events.len() as u64 - correlated_events;
+        let correlation_confidence_counts = correlation_confidence_counts(
+            events
+                .iter()
+                .map(|event| event.correlation_confidence.as_str()),
+        );
         let session_metadata = serde_json::json!({
             "lab_id": "trace",
             "session_id": session_id,
             "source_path": source_path,
             "event_count": events.len(),
             "thread_count": threads.len(),
+            "correlated_event_count": correlated_events,
+            "uncorrelated_event_count": uncorrelated_events,
+            "correlation_confidence": correlation_confidence_counts,
             "diagnostics": diagnostics,
             "command_previews": [
                 format!(":open {session_ref}"),
@@ -2886,11 +2988,7 @@ impl<'conn> TraceRepository<'conn> {
             imported_at,
         )?;
 
-        let mut correlated_events = 0u64;
         for event in &events {
-            if event.correlated.is_some() {
-                correlated_events += 1;
-            }
             self.upsert_event(&session_ref, artifact, event)?;
         }
 
@@ -2918,6 +3016,8 @@ impl<'conn> TraceRepository<'conn> {
                 "source_path": source_path,
                 "events_imported": events.len(),
                 "correlated_events": correlated_events,
+                "uncorrelated_events": uncorrelated_events,
+                "correlation_confidence": correlation_confidence_counts,
                 "malformed_lines": malformed_lines,
                 "threads": threads,
                 "diagnostics": diagnostics,
@@ -3065,6 +3165,8 @@ impl<'conn> TraceRepository<'conn> {
                 "address": event.address,
                 "message": event.message,
                 "correlated": event.correlated.as_ref().map(ToString::to_string),
+                "correlation_method": event.correlation_method,
+                "correlation_confidence": event.correlation_confidence,
                 "raw": serde_json::from_str::<serde_json::Value>(&event.raw_json)
                     .unwrap_or_else(|_| serde_json::json!({ "raw": event.raw_json })),
                 "command_previews": event.correlated.as_ref().map(|target| {
@@ -3145,7 +3247,9 @@ impl<'conn> TraceRepository<'conn> {
                 metadata_json: serde_json::json!({
                     "lab_id": "trace",
                     "address": event.address,
-                    "function": event.function_name
+                    "function": event.function_name,
+                    "correlation_method": event.correlation_method,
+                    "correlation_confidence": event.correlation_confidence
                 })
                 .to_string(),
             })?;
@@ -3158,7 +3262,7 @@ impl<'conn> TraceRepository<'conn> {
         artifact: &ObjectRef,
         address: Option<u64>,
         function_name: Option<&str>,
-    ) -> rusqlite::Result<Option<ObjectRef>> {
+    ) -> rusqlite::Result<Option<FunctionCorrelation>> {
         if let Some(address) = address {
             let correlated = self
                 .connection
@@ -3177,10 +3281,14 @@ impl<'conn> TraceRepository<'conn> {
                 )
                 .optional()?;
             if let Some(key) = correlated {
-                return Ok(Some(ObjectRef::new(
-                    ObjectKind::Function,
-                    key.parse().map_err(from_core_error)?,
-                )));
+                return Ok(Some(FunctionCorrelation {
+                    target: ObjectRef::new(
+                        ObjectKind::Function,
+                        key.parse().map_err(from_core_error)?,
+                    ),
+                    method: "address_range".to_string(),
+                    confidence: "high".to_string(),
+                }));
             }
         }
         if let Some(function_name) = function_name {
@@ -3199,10 +3307,14 @@ impl<'conn> TraceRepository<'conn> {
                 )
                 .optional()?;
             if let Some(key) = correlated {
-                return Ok(Some(ObjectRef::new(
-                    ObjectKind::Function,
-                    key.parse().map_err(from_core_error)?,
-                )));
+                return Ok(Some(FunctionCorrelation {
+                    target: ObjectRef::new(
+                        ObjectKind::Function,
+                        key.parse().map_err(from_core_error)?,
+                    ),
+                    method: "exact_symbol".to_string(),
+                    confidence: "medium".to_string(),
+                }));
             }
         }
         Ok(None)
@@ -3241,6 +3353,18 @@ impl<'conn> TraceRepository<'conn> {
         let artifact_key: String = row.get(2)?;
         let correlated_key: Option<String> = row.get(11)?;
         let correlated_kind: Option<String> = row.get(12)?;
+        let function_name: Option<String> = row.get(8)?;
+        let address = row.get::<_, Option<i64>>(9)?.map(from_i64);
+        let has_correlation = correlated_key.is_some();
+        let correlated =
+            if let (Some(key), Some(kind)) = (correlated_key.as_ref(), correlated_kind.as_ref()) {
+                Some(ObjectRef::new(
+                    kind.parse().map_err(from_core_error)?,
+                    key.parse().map_err(from_core_error)?,
+                ))
+            } else {
+                None
+            };
         Ok(TraceEventRecord {
             object_ref: ObjectRef::new(
                 ObjectKind::TraceEvent,
@@ -3259,16 +3383,15 @@ impl<'conn> TraceRepository<'conn> {
             thread_id: row.get(5)?,
             event_kind: row.get(6)?,
             timestamp_ns: row.get::<_, Option<i64>>(7)?.map(from_i64),
-            function_name: row.get(8)?,
-            address: row.get::<_, Option<i64>>(9)?.map(from_i64),
+            function_name: function_name.clone(),
+            address,
             message: row.get(10)?,
-            correlated: if let (Some(key), Some(kind)) = (correlated_key, correlated_kind) {
-                Some(ObjectRef::new(
-                    kind.parse().map_err(from_core_error)?,
-                    key.parse().map_err(from_core_error)?,
-                ))
+            correlated,
+            correlation_method: correlation_miss_reason(address, function_name.as_deref()),
+            correlation_confidence: if has_correlation {
+                "legacy".to_string()
             } else {
-                None
+                "none".to_string()
             },
             raw_json: row.get(13)?,
         })
@@ -3289,14 +3412,32 @@ impl<'conn> CrashRepository<'conn> {
     ) -> rusqlite::Result<CrashImportOutcome> {
         let mut parsed = parse_crash_log(source_path, log)?;
         for frame in &mut parsed.frames {
-            frame.correlated =
+            let correlation =
                 self.correlate_function(artifact, frame.address, frame.function_name.as_deref())?;
+            frame.correlated = correlation.as_ref().map(|item| item.target.clone());
+            frame.correlation_method = correlation
+                .as_ref()
+                .map(|item| item.method.clone())
+                .unwrap_or_else(|| {
+                    correlation_miss_reason(frame.address, frame.function_name.as_deref())
+                });
+            frame.correlation_confidence = correlation
+                .as_ref()
+                .map(|item| item.confidence.clone())
+                .unwrap_or_else(|| "none".to_string());
         }
         let correlated_frames = parsed
             .frames
             .iter()
             .filter(|frame| frame.correlated.is_some())
             .count() as u64;
+        let uncorrelated_frames = parsed.frames.len() as u64 - correlated_frames;
+        let correlation_confidence_counts = correlation_confidence_counts(
+            parsed
+                .frames
+                .iter()
+                .map(|frame| frame.correlation_confidence.as_str()),
+        );
         let report_ref = ObjectRef::lab_object(
             ObjectKind::CrashReport,
             Some(&artifact.key),
@@ -3323,6 +3464,8 @@ impl<'conn> CrashRepository<'conn> {
                 "signature": &parsed.signature,
                 "frame_count": parsed.frames.len(),
                 "correlated_frame_count": correlated_frames,
+                "uncorrelated_frame_count": uncorrelated_frames,
+                "correlation_confidence": correlation_confidence_counts,
                 "diagnostics": &parsed.diagnostics,
                 "command_previews": [
                     format!(":open {report_ref}"),
@@ -3382,6 +3525,8 @@ impl<'conn> CrashRepository<'conn> {
                 "signature": &parsed.signature,
                 "frames_imported": parsed.frames.len(),
                 "correlated_frames": correlated_frames,
+                "uncorrelated_frames": uncorrelated_frames,
+                "correlation_confidence": correlation_confidence_counts,
                 "clustered_reports": clustered_reports,
                 "findings_created": findings_created,
                 "diagnostics": &parsed.diagnostics,
@@ -3538,6 +3683,8 @@ impl<'conn> CrashRepository<'conn> {
                 "source_location": &frame.source_location,
                 "confidence": &frame.confidence,
                 "correlated": frame.correlated.as_ref().map(ToString::to_string),
+                "correlation_method": frame.correlation_method,
+                "correlation_confidence": frame.correlation_confidence,
                 "raw": serde_json::from_str::<serde_json::Value>(&frame.raw_json)
                     .unwrap_or_else(|_| serde_json::json!({ "raw": &frame.raw_json })),
                 "command_previews": frame.correlated.as_ref().map(|target| {
@@ -3614,7 +3761,9 @@ impl<'conn> CrashRepository<'conn> {
                     "lab_id": "crash",
                     "address": frame.address,
                     "function": &frame.function_name,
-                    "confidence": &frame.confidence
+                    "confidence": &frame.confidence,
+                    "correlation_method": frame.correlation_method,
+                    "correlation_confidence": frame.correlation_confidence
                 })
                 .to_string(),
             })?;
@@ -3751,7 +3900,7 @@ impl<'conn> CrashRepository<'conn> {
         artifact: &ObjectRef,
         address: Option<u64>,
         function_name: Option<&str>,
-    ) -> rusqlite::Result<Option<ObjectRef>> {
+    ) -> rusqlite::Result<Option<FunctionCorrelation>> {
         if let Some(address) = address {
             let correlated = self
                 .connection
@@ -3770,10 +3919,14 @@ impl<'conn> CrashRepository<'conn> {
                 )
                 .optional()?;
             if let Some(key) = correlated {
-                return Ok(Some(ObjectRef::new(
-                    ObjectKind::Function,
-                    key.parse().map_err(from_core_error)?,
-                )));
+                return Ok(Some(FunctionCorrelation {
+                    target: ObjectRef::new(
+                        ObjectKind::Function,
+                        key.parse().map_err(from_core_error)?,
+                    ),
+                    method: "address_range".to_string(),
+                    confidence: "high".to_string(),
+                }));
             }
         }
         if let Some(function_name) = function_name {
@@ -3792,10 +3945,14 @@ impl<'conn> CrashRepository<'conn> {
                 )
                 .optional()?;
             if let Some(key) = correlated {
-                return Ok(Some(ObjectRef::new(
-                    ObjectKind::Function,
-                    key.parse().map_err(from_core_error)?,
-                )));
+                return Ok(Some(FunctionCorrelation {
+                    target: ObjectRef::new(
+                        ObjectKind::Function,
+                        key.parse().map_err(from_core_error)?,
+                    ),
+                    method: "exact_symbol".to_string(),
+                    confidence: "medium".to_string(),
+                }));
             }
         }
         Ok(None)
@@ -3836,6 +3993,18 @@ impl<'conn> CrashRepository<'conn> {
         let artifact_key: String = row.get(2)?;
         let correlated_key: Option<String> = row.get(10)?;
         let correlated_kind: Option<String> = row.get(11)?;
+        let function_name: Option<String> = row.get(5)?;
+        let address = row.get::<_, Option<i64>>(6)?.map(from_i64);
+        let has_correlation = correlated_key.is_some();
+        let correlated =
+            if let (Some(key), Some(kind)) = (correlated_key.as_ref(), correlated_kind.as_ref()) {
+                Some(ObjectRef::new(
+                    kind.parse().map_err(from_core_error)?,
+                    key.parse().map_err(from_core_error)?,
+                ))
+            } else {
+                None
+            };
         Ok(CrashFrameRecord {
             object_ref: ObjectRef::new(
                 ObjectKind::CrashFrame,
@@ -3851,18 +4020,17 @@ impl<'conn> CrashRepository<'conn> {
             ),
             frame_index: from_i64(row.get(3)?),
             module: row.get(4)?,
-            function_name: row.get(5)?,
-            address: row.get::<_, Option<i64>>(6)?.map(from_i64),
+            function_name: function_name.clone(),
+            address,
             offset: row.get::<_, Option<i64>>(7)?.map(from_i64),
             source_location: row.get(8)?,
             confidence: row.get(9)?,
-            correlated: if let (Some(key), Some(kind)) = (correlated_key, correlated_kind) {
-                Some(ObjectRef::new(
-                    kind.parse().map_err(from_core_error)?,
-                    key.parse().map_err(from_core_error)?,
-                ))
+            correlated,
+            correlation_method: correlation_miss_reason(address, function_name.as_deref()),
+            correlation_confidence: if has_correlation {
+                "legacy".to_string()
             } else {
-                None
+                "none".to_string()
             },
             raw_json: row.get(12)?,
         })
@@ -4234,6 +4402,11 @@ impl<'conn> ProtocolRepository<'conn> {
                 "name": &field.name,
                 "byte_offset": field.byte_offset,
                 "byte_length": field.byte_length,
+                "byte_range": {
+                    "start": field.byte_offset,
+                    "end": field.byte_offset + field.byte_length,
+                    "length": field.byte_length
+                },
                 "field_type": &field.field_type,
                 "confidence": &field.confidence,
                 "entropy": field.entropy,
@@ -4242,15 +4415,18 @@ impl<'conn> ProtocolRepository<'conn> {
                 "string_hint": &field.string_hint,
                 "value_hex": &field.value_hex,
                 "correlated": field.correlated.as_ref().map(ToString::to_string),
+                "pivots": protocol_field_pivots(field, &field_ref),
                 "raw": serde_json::from_str::<serde_json::Value>(&field.raw_json)
                     .unwrap_or_else(|_| serde_json::json!({ "raw": &field.raw_json })),
                 "command_previews": field.correlated.as_ref().map(|target| {
                     vec![
                         format!(":open {target}"),
+                        format!("revdeck strings <project> --contains \"{}\" --json", field.string_hint.as_deref().unwrap_or(&field.name)),
                         format!(":finding link <finding> {} evidence", field_ref)
                     ]
                 }).unwrap_or_else(|| vec![
                     format!(":open {field_ref}"),
+                    format!("revdeck inspect <project> {field_ref} --json"),
                     format!(":finding link <finding> {field_ref} evidence")
                 ])
             })
@@ -4584,6 +4760,118 @@ fn export_artifact_keys(evidence_objects: &[revdeck_core::ObjectSummary]) -> BTr
         .collect()
 }
 
+impl<'conn> ProjectMetadataRepository<'conn> {
+    pub fn new(connection: &'conn Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn set_metadata(
+        &self,
+        key: &str,
+        value: &str,
+        updated_at: OffsetDateTime,
+    ) -> rusqlite::Result<()> {
+        let key = validate_metadata_key(key)?;
+        self.connection.execute(
+            "INSERT INTO project_metadata (key, value, updated_at)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at",
+            params![key, value, format_time(updated_at)?],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_metadata(&self, key: &str) -> rusqlite::Result<Option<ProjectMetadataRecord>> {
+        let key = validate_metadata_key(key)?;
+        self.connection
+            .query_row(
+                "SELECT key, value, updated_at FROM project_metadata WHERE key = ?1",
+                params![key],
+                Self::metadata_from_row,
+            )
+            .optional()
+    }
+
+    pub fn list_metadata(&self) -> rusqlite::Result<Vec<ProjectMetadataRecord>> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT key, value, updated_at FROM project_metadata ORDER BY key")?;
+        let rows = statement.query_map([], Self::metadata_from_row)?;
+        rows.collect()
+    }
+
+    pub fn add_note(
+        &self,
+        category: &str,
+        title: &str,
+        body: &str,
+        created_at: OffsetDateTime,
+    ) -> rusqlite::Result<ProjectNoteRecord> {
+        let category = validate_note_field("category", category)?;
+        let title = validate_note_field("title", title)?;
+        self.connection.execute(
+            "INSERT INTO project_notes (category, title, body, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![category, title, body, format_time(created_at)?],
+        )?;
+        let note_id = self.connection.last_insert_rowid();
+        self.get_note(note_id)?.ok_or_else(|| {
+            string_from_sql_error(
+                "inserted note was not found".to_string(),
+                rusqlite::types::Type::Integer,
+            )
+        })
+    }
+
+    pub fn list_notes(&self, limit: usize) -> rusqlite::Result<Vec<ProjectNoteRecord>> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = self.connection.prepare(
+            "SELECT note_id, category, title, body, created_at, updated_at
+            FROM project_notes
+            ORDER BY updated_at DESC, note_id DESC
+            LIMIT ?1",
+        )?;
+        let rows = statement.query_map(params![limit], Self::note_from_row)?;
+        rows.collect()
+    }
+
+    pub fn get_note(&self, note_id: i64) -> rusqlite::Result<Option<ProjectNoteRecord>> {
+        self.connection
+            .query_row(
+                "SELECT note_id, category, title, body, created_at, updated_at
+                FROM project_notes
+                WHERE note_id = ?1",
+                params![note_id],
+                Self::note_from_row,
+            )
+            .optional()
+    }
+
+    fn metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectMetadataRecord> {
+        let updated_at: String = row.get(2)?;
+        Ok(ProjectMetadataRecord {
+            key: row.get(0)?,
+            value: row.get(1)?,
+            updated_at: parse_time(&updated_at)?,
+        })
+    }
+
+    fn note_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProjectNoteRecord> {
+        let created_at: String = row.get(4)?;
+        let updated_at: String = row.get(5)?;
+        Ok(ProjectNoteRecord {
+            note_id: row.get(0)?,
+            category: row.get(1)?,
+            title: row.get(2)?,
+            body: row.get(3)?,
+            created_at: parse_time(&created_at)?,
+            updated_at: parse_time(&updated_at)?,
+        })
+    }
+}
+
 fn export_analysis_job(job: AnalysisJobRecord) -> ExportAnalysisJob {
     ExportAnalysisJob {
         id: job.id,
@@ -4611,6 +4899,25 @@ fn export_plugin_run(run: PluginRunRecord) -> ExportPluginRun {
         diagnostics_json: run.diagnostics_json,
         started_at: run.started_at,
         finished_at: run.finished_at,
+    }
+}
+
+fn export_case_metadata(record: ProjectMetadataRecord) -> ExportCaseMetadata {
+    ExportCaseMetadata {
+        key: record.key,
+        value: record.value,
+        updated_at: record.updated_at,
+    }
+}
+
+fn export_case_note(record: ProjectNoteRecord) -> ExportCaseNote {
+    ExportCaseNote {
+        note_id: record.note_id,
+        category: record.category,
+        title: record.title,
+        body: record.body,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
     }
 }
 
@@ -4642,6 +4949,34 @@ fn parse_time(value: &str) -> rusqlite::Result<OffsetDateTime> {
     OffsetDateTime::parse(value, &Rfc3339).map_err(|err| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
     })
+}
+
+fn validate_metadata_key(key: &str) -> rusqlite::Result<&str> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err(string_from_sql_error(
+            "metadata key must not be empty".to_string(),
+            rusqlite::types::Type::Text,
+        ));
+    }
+    if key.chars().any(char::is_whitespace) {
+        return Err(string_from_sql_error(
+            "metadata key must not contain whitespace".to_string(),
+            rusqlite::types::Type::Text,
+        ));
+    }
+    Ok(key)
+}
+
+fn validate_note_field<'a>(field: &str, value: &'a str) -> rusqlite::Result<&'a str> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(string_from_sql_error(
+            format!("{field} must not be empty"),
+            rusqlite::types::Type::Text,
+        ));
+    }
+    Ok(value)
 }
 
 fn collect_firmware_files(firmware_dir: &Path) -> rusqlite::Result<Vec<ParsedFirmwareFile>> {
@@ -5183,6 +5518,60 @@ fn normalize_protocol_token(value: &str) -> String {
     normalize_crash_token(value)
 }
 
+fn protocol_field_pivots(
+    field: &ParsedProtocolField,
+    field_ref: &ObjectRef,
+) -> Vec<serde_json::Value> {
+    let mut pivots = vec![
+        serde_json::json!({
+            "kind": "field",
+            "label": "Open protocol field",
+            "target": field_ref.to_string(),
+            "command": format!("revdeck inspect <project> {field_ref} --json")
+        }),
+        serde_json::json!({
+            "kind": "offset",
+            "label": "Payload byte range",
+            "byte_offset": field.byte_offset,
+            "byte_length": field.byte_length
+        }),
+    ];
+    if let Some(hint) = field.string_hint.as_deref() {
+        pivots.push(serde_json::json!({
+            "kind": "string_hint",
+            "label": "Search matching binary strings",
+            "value": hint,
+            "correlated": field.correlated.as_ref().map(ToString::to_string),
+            "command": format!("revdeck strings <project> --contains \"{hint}\" --json")
+        }));
+    }
+    pivots
+}
+
+fn correlation_miss_reason(address: Option<u64>, function_name: Option<&str>) -> String {
+    match (
+        address,
+        function_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+    ) {
+        (Some(_), Some(_)) => "unresolved_address_symbol".to_string(),
+        (Some(_), None) => "unresolved_address".to_string(),
+        (None, Some(_)) => "unresolved_symbol".to_string(),
+        (None, None) => "missing_address_symbol".to_string(),
+    }
+}
+
+fn correlation_confidence_counts<'a>(
+    values: impl IntoIterator<Item = &'a str>,
+) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for value in values {
+        *counts.entry(value.to_string()).or_default() += 1;
+    }
+    counts
+}
+
 fn parse_crash_log(source_path: &str, log: &str) -> rusqlite::Result<ParsedCrashReport> {
     let trimmed = log.trim();
     if trimmed.is_empty() {
@@ -5261,6 +5650,8 @@ fn parse_crash_json(
                 confidence: trace_string(frame_value, &["confidence"])
                     .unwrap_or_else(|| "reported".to_string()),
                 correlated: None,
+                correlation_method: "unresolved".to_string(),
+                correlation_confidence: "none".to_string(),
                 raw_json,
             });
         }
@@ -5383,6 +5774,8 @@ fn parse_crash_text_frames(log: &str, diagnostics: &mut Vec<String>) -> Vec<Pars
             source_location,
             confidence: "reported".to_string(),
             correlated: None,
+            correlation_method: "unresolved".to_string(),
+            correlation_confidence: "none".to_string(),
             raw_json: serde_json::json!({ "line": trimmed }).to_string(),
         });
     }
