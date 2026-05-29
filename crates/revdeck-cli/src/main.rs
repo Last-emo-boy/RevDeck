@@ -266,7 +266,8 @@ fn main() -> anyhow::Result<()> {
                     registration_json(&registration, Some(&project), "background-running")
                 );
                 drop(project);
-                spawn_registered_analysis_worker(project_dir.clone(), registration);
+                spawn_registered_analysis_worker(project_dir.clone(), registration)
+                    .context("failed to start background analysis worker")?;
                 revdeck_tui::run_project_tui(project_dir)?;
                 return Ok(());
             }
@@ -1203,19 +1204,26 @@ fn registration_json(
     value
 }
 
-fn spawn_registered_analysis_worker(project_dir: PathBuf, registration: BinaryRegistration) {
-    thread::spawn(move || {
-        if let Err(err) = run_registered_analysis_worker(&project_dir, registration) {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "status": "background-analysis-failed",
-                    "project": project_dir.display().to_string(),
-                    "error": err.to_string()
-                })
-            );
-        }
-    });
+fn spawn_registered_analysis_worker(
+    project_dir: PathBuf,
+    registration: BinaryRegistration,
+) -> anyhow::Result<()> {
+    thread::Builder::new()
+        .name("revdeck-analysis-worker".to_string())
+        .spawn(move || {
+            if let Err(err) = run_registered_analysis_worker(&project_dir, registration) {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "status": "background-analysis-failed",
+                        "project": project_dir.display().to_string(),
+                        "error": err.to_string()
+                    })
+                );
+            }
+        })
+        .context("failed to spawn revdeck-analysis-worker")?;
+    Ok(())
 }
 
 fn run_registered_analysis_worker(

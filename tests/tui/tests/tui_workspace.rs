@@ -1,10 +1,14 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{backend::TestBackend, Terminal};
 use revdeck_core::{
-    AnalysisJobRow, AnalysisJobsSummary, EdgeKind, InMemoryObjectGraph, NavigationLens, ObjectKind,
-    ObjectRef, ObjectRelation, ObjectSummary, StableObjectKey, StableObjectKeyBuilder,
+    AnalysisJobRow, AnalysisJobsSummary, EdgeKind, InMemoryObjectGraph, NavigationLens,
+    ObjectGraphQuery, ObjectKind, ObjectRef, ObjectRelation, ObjectSummary, StableObjectKey,
+    StableObjectKeyBuilder,
 };
-use revdeck_db::{FindingRepository, MemoryRepository, ProjectDatabase};
+use revdeck_db::{
+    FindingRepository, IndexRepository, MemoryRepository, ObjectQueryRepository, ObjectRepository,
+    ProjectDatabase, SectionRecord, StoredObject, StringRecord,
+};
 use revdeck_index::AnalysisProfile;
 use revdeck_tui::{render_workspace, PaneFocus, TuiAction, TuiShellState, WorkspaceSnapshot};
 use time::macros::datetime;
@@ -18,6 +22,21 @@ fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
         .map(|cell| cell.symbol())
         .collect::<Vec<_>>()
         .join("")
+}
+
+fn normalized_text(text: &str) -> String {
+    text.chars()
+        .map(|ch| {
+            if ('\u{2500}'..='\u{257f}').contains(&ch) {
+                ' '
+            } else {
+                ch
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn test_summary(
@@ -457,6 +476,11 @@ fn render_help_overlay() {
     assert!(text.contains("Navigation"));
     assert!(text.contains("D diff"));
     assert!(text.contains(":find string password"));
+    assert!(text.contains(":hex-search window"));
+    assert!(text.contains("file + window offsets"));
+    assert!(text.contains(":hex-find full file"));
+    assert!(text.contains("text escapes"));
+    assert!(text.contains(r#"\\ \" \' \n \r \t \0 \xNN"#));
     assert!(text.contains("Current next step"));
 }
 
@@ -948,6 +972,14 @@ fn command_deck_overlay_traps_navigation_until_closed() {
     assert!(text.contains("Command Deck"));
     assert!(text.contains("Current Object"));
     assert!(text.contains(":xrefs current"));
+    assert!(text.contains(":hex current/selected or :hex-current"));
+    assert!(text.contains(":hex-search / :bytes-search"));
+    assert!(text.contains(":hex-find / :bytes-find"));
+    assert!(text.contains("current Hex window"));
+    assert!(text.contains("window +0x offset"));
+    assert!(text.contains("scan full file bytes"));
+    assert!(text.contains("0xde 0xad"));
+    assert!(text.contains(r#"\\ \" \' \n \r \t \0 \xNN"#));
 
     app.handle_key_event(
         KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
@@ -1080,6 +1112,8 @@ fn jobs_lens_selected_inspector_distinguishes_failed_skipped_and_running() {
     assert!(failed_text.contains("triage"));
     assert!(failed_text.contains("index_model_error"));
     assert!(failed_text.contains("State: failed"));
+    assert!(failed_text.contains("Recovery: rerun --no-tui"));
+    assert!(failed_text.contains("Cancel: no destructive action"));
 
     app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
     terminal
@@ -1098,6 +1132,7 @@ fn jobs_lens_selected_inspector_distinguishes_failed_skipped_and_running() {
     assert!(running_text.contains("parse"));
     assert!(running_text.contains("snapshot load"));
     assert!(running_text.contains("live refresh"));
+    assert!(running_text.contains("Cancel: read-only until safe"));
 }
 
 #[test]
@@ -1322,7 +1357,7 @@ fn project_snapshot_loads_artifact_scoped_analysis_jobs() {
     let mut app = TuiShellState::from_snapshot(&snapshot);
     app.apply_action(TuiAction::SwitchLens(NavigationLens::Jobs), &snapshot)
         .unwrap();
-    let backend = TestBackend::new(150, 30);
+    let backend = TestBackend::new(150, 36);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| render_workspace(frame, &app, &snapshot))
@@ -1366,7 +1401,7 @@ fn project_snapshot_loads_hex_view_before_full_indexing() {
     let mut app = TuiShellState::from_snapshot(&snapshot);
     app.apply_action(TuiAction::SwitchLens(NavigationLens::Hex), &snapshot)
         .unwrap();
-    let backend = TestBackend::new(150, 30);
+    let backend = TestBackend::new(150, 40);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| render_workspace(frame, &app, &snapshot))
@@ -1376,6 +1411,1757 @@ fn project_snapshot_loads_hex_view_before_full_indexing() {
     assert!(text.contains("Hex Viewer"));
     assert!(text.contains("7f 45 4c 46"));
     assert!(text.contains("read-only"));
+}
+
+#[test]
+fn hex_viewer_supports_goto_and_window_search_commands() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("fixtures")
+        .join("binaries")
+        .join("minimal_elf");
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":goto 0X20", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Hex);
+    assert_eq!(snapshot.hex.base_offset, 0x20);
+    assert!(app.status_line.contains("hex file offset=0x00000020"));
+
+    app.submit_project_command(":hex-search 01 00", &mut snapshot, &project)
+        .unwrap();
+
+    assert!(app.status_line.contains("hex search: match at file offset"));
+
+    app.submit_project_command(":bytes-search 0X01 0X00", &mut snapshot, &project)
+        .unwrap();
+
+    assert!(app.status_line.contains("hex search: match at file offset"));
+}
+
+#[test]
+fn hex_goto_reports_offset_argument_errors() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("goto-errors.bin");
+    std::fs::write(&binary, vec![0_u8; 128]).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    let err = app
+        .submit_project_command(":goto", &mut snapshot, &project)
+        .unwrap_err();
+    assert_eq!(
+        err.kind,
+        revdeck_core::CommandDiagnosticKind::MissingArgument
+    );
+    assert!(err.message.contains("missing required argument `offset`"));
+
+    let err = app
+        .submit_project_command(":goto nope", &mut snapshot, &project)
+        .unwrap_err();
+    assert_eq!(err.kind, revdeck_core::CommandDiagnosticKind::InvalidSyntax);
+    assert!(err.message.contains("invalid byte offset `nope`"));
+}
+
+#[test]
+fn hex_viewer_file_find_scans_beyond_loaded_window() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("wide-search.bin");
+    let mut bytes = vec![0_u8; 640];
+    bytes[0..4].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+    bytes[0x180..0x184].copy_from_slice(&[0xca, 0xfe, 0xba, 0xbe]);
+    std::fs::write(&binary, bytes).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":hex-search ca fe ba be", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0);
+    assert!(app
+        .status_line
+        .contains("hex search: no match for ca fe ba be"));
+    assert!(app
+        .status_line
+        .contains("scanned 256/640 bytes in current window 0x00000000-0x000000ff"));
+    assert!(app.status_line.contains("try :hex-find ca fe ba be"));
+
+    app.submit_project_command(":hex-find ca fe ba be", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Hex);
+    assert_eq!(snapshot.hex.base_offset, 0x180);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x00000180"));
+    assert!(app.status_line.contains("scanned 640/640 bytes in 1 chunk"));
+    assert_eq!(app.main_cursor, 0);
+
+    app.submit_project_command(":bytes-find ff ee dd cc", &mut snapshot, &project)
+        .unwrap();
+
+    assert!(app
+        .status_line
+        .contains("hex find: no match for ff ee dd cc"));
+    assert!(app.status_line.contains("scanned 640/640 bytes in 1 chunk"));
+
+    let snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let hex_jobs = snapshot
+        .analysis_jobs
+        .iter()
+        .filter(|job| job.pass_name == "hex.find")
+        .collect::<Vec<_>>();
+    assert_eq!(hex_jobs.len(), 2);
+    assert!(hex_jobs.iter().any(|job| job.status == "succeeded"));
+    assert!(hex_jobs.iter().any(|job| job.status == "skipped"));
+    let success = hex_jobs
+        .iter()
+        .find(|job| job.status == "succeeded")
+        .expect("successful hex.find job");
+    assert!(success.metadata_summary.contains("needle=ca fe ba be"));
+    assert!(success.metadata_summary.contains("mode=auto"));
+    assert!(success.metadata_summary.contains("len=4"));
+    assert!(success.metadata_summary.contains("result=match"));
+    assert!(success.metadata_summary.contains("offset=0x00000180"));
+    assert!(success.metadata_summary.contains("scanned=640/640"));
+    assert!(success.metadata_summary.contains("chunks=1 chunk"));
+    assert!(success
+        .metadata_items
+        .iter()
+        .any(|item| item.key == "result" && item.value == "match"));
+    assert!(success
+        .parameter_items
+        .iter()
+        .any(|item| item.key == "offset_space" && item.value == "file"));
+    assert!(success
+        .parameter_items
+        .iter()
+        .any(|item| item.key == "bytes_scanned" && item.value == "640"));
+    assert!(success
+        .parameter_items
+        .iter()
+        .any(|item| item.key == "chunk_count" && item.value == "1"));
+    let skipped = hex_jobs
+        .iter()
+        .find(|job| job.status == "skipped")
+        .expect("skipped hex.find job");
+    assert_eq!(skipped.progress, "640/640");
+    assert!(skipped.metadata_summary.contains("needle=ff ee dd cc"));
+    assert!(skipped.metadata_summary.contains("mode=auto"));
+    assert!(skipped.metadata_summary.contains("len=4"));
+    assert!(skipped.metadata_summary.contains("result=no_match"));
+    assert!(skipped.metadata_summary.contains("scanned=640/640"));
+    assert!(skipped.metadata_summary.contains("chunks=1 chunk"));
+    assert!(skipped
+        .metadata_items
+        .iter()
+        .any(|item| item.key == "result" && item.value == "no_match"));
+    assert!(skipped
+        .parameter_items
+        .iter()
+        .any(|item| item.key == "bytes_scanned" && item.value == "640"));
+}
+
+#[test]
+fn hex_search_window_summary_uses_short_file_bounds() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("short-window.bin");
+    std::fs::write(&binary, b"short-window-data").unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":hex-search ff ee", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0);
+    assert!(app.status_line.contains("hex search: no match for ff ee"));
+    assert!(app
+        .status_line
+        .contains("scanned 17/17 bytes in current window 0x00000000-0x00000010"));
+}
+
+#[test]
+fn hex_search_window_summary_handles_empty_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("empty-window.bin");
+    std::fs::write(&binary, []).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":hex-search ff", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.file_size, Some(0));
+    assert!(snapshot.hex.rows.is_empty());
+    assert!(app.status_line.contains("hex search: no match for ff"));
+    assert!(app
+        .status_line
+        .contains("scanned 0/0 bytes in current window 0x00000000-0x00000000"));
+}
+
+#[test]
+fn hex_viewer_file_find_reports_multi_chunk_scans() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("multi-chunk-search.bin");
+    let match_offset = 0x10020;
+    let mut bytes = vec![0_u8; 0x10080];
+    bytes[match_offset..match_offset + 4].copy_from_slice(&[0xca, 0xfe, 0xba, 0xbe]);
+    std::fs::write(&binary, bytes).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":hex-find hex:ca fe ba be", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Hex);
+    assert_eq!(snapshot.hex.base_offset, match_offset as u64);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x00010020"));
+    assert!(app
+        .status_line
+        .contains("scanned 65664/65664 bytes in 2 chunks"));
+
+    let snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let job_index = snapshot
+        .analysis_jobs
+        .iter()
+        .position(|job| job.pass_name == "hex.find")
+        .expect("hex.find job should be present");
+    let job = &snapshot.analysis_jobs[job_index];
+    assert_eq!(job.status, "succeeded");
+    assert_eq!(job.progress, "65664/65664");
+    assert!(job.metadata_summary.contains("needle=hex:ca fe ba be"));
+    assert!(job.metadata_summary.contains("mode=hex"));
+    assert!(job.metadata_summary.contains("len=4"));
+    assert!(job.metadata_summary.contains("result=match"));
+    assert!(job.metadata_summary.contains("offset=0x00010020"));
+    assert!(job.metadata_summary.contains("scanned=65664/65664"));
+    assert!(job.metadata_summary.contains("chunks=2 chunks"));
+    assert!(job
+        .parameter_items
+        .iter()
+        .any(|item| item.key == "bytes_scanned" && item.value == "65664"));
+    assert!(job
+        .parameter_items
+        .iter()
+        .any(|item| item.key == "chunk_count" && item.value == "2"));
+
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Jobs), &snapshot)
+        .unwrap();
+    app.main_cursor = job_index;
+    app.apply_action(TuiAction::FocusPane(PaneFocus::Inspector), &snapshot)
+        .unwrap();
+    let backend = TestBackend::new(150, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+    let normalized = normalized_text(&text);
+
+    assert!(text.contains("Needle: hex:ca fe ba be"));
+    assert!(normalized.contains("Scanned: 65664/65664 bytes in 2 chunks"));
+    assert!(text.contains("Result: match"));
+    assert!(text.contains("Result offset: 0x00010020"));
+}
+
+#[test]
+fn hex_viewer_file_find_matches_needle_across_chunk_boundary() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("chunk-boundary-search.bin");
+    let match_offset = 0xfffe;
+    let mut bytes = vec![0_u8; 0x10040];
+    bytes[match_offset..match_offset + 4].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+    std::fs::write(&binary, bytes).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":hex-find de ad be ef", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Hex);
+    assert_eq!(snapshot.hex.base_offset, match_offset as u64);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x0000fffe"));
+    assert!(app
+        .status_line
+        .contains("scanned 65600/65600 bytes in 2 chunks"));
+
+    let snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let job = snapshot
+        .analysis_jobs
+        .iter()
+        .find(|job| job.pass_name == "hex.find")
+        .expect("hex.find job should be present");
+    assert_eq!(job.status, "succeeded");
+    assert_eq!(job.progress, "65600/65600");
+    assert!(job.metadata_summary.contains("needle=de ad be ef"));
+    assert!(job.metadata_summary.contains("mode=auto"));
+    assert!(job.metadata_summary.contains("len=4"));
+    assert!(job.metadata_summary.contains("result=match"));
+    assert!(job.metadata_summary.contains("offset=0x0000fffe"));
+    assert!(job.metadata_summary.contains("scanned=65600/65600"));
+    assert!(job.metadata_summary.contains("chunks=2 chunks"));
+    assert!(job
+        .parameter_items
+        .iter()
+        .any(|item| item.key == "chunk_count" && item.value == "2"));
+}
+
+#[test]
+fn hex_search_status_preserves_explicit_text_needle_label() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("text-label.bin");
+    std::fs::write(&binary, vec![0_u8; 256]).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":hex-search text:\"not present\"", &mut snapshot, &project)
+        .unwrap();
+
+    assert!(app
+        .status_line
+        .contains("hex search: no match for text:\"not present\""));
+    assert!(app
+        .status_line
+        .contains("try :hex-find text:\"not present\""));
+
+    app.submit_project_command(":hex-find text:\"not present\"", &mut snapshot, &project)
+        .unwrap();
+
+    assert!(app
+        .status_line
+        .contains("hex find: no match for text:\"not present\""));
+    assert!(app.status_line.contains("scanned 256/256 bytes in 1 chunk"));
+    let snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let job = snapshot
+        .analysis_jobs
+        .iter()
+        .find(|job| job.pass_name == "hex.find")
+        .expect("hex.find job should be recorded");
+    assert!(job
+        .metadata_items
+        .iter()
+        .any(|item| item.key == "needle" && item.value == "text:\"not present\""));
+    assert!(job
+        .metadata_items
+        .iter()
+        .any(|item| item.key == "needle_mode" && item.value == "text"));
+    assert!(job.metadata_summary.contains("mode=text"));
+    assert!(job.metadata_summary.contains("len=11"));
+}
+
+#[test]
+fn hex_search_supports_explicit_text_and_hex_needles() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("needle-modes.bin");
+    let mut bytes = vec![0_u8; 512];
+    bytes[0x80..0x84].copy_from_slice(b"dead");
+    bytes[0xc0..0xce].copy_from_slice(b"admin password");
+    bytes[0x120..0x122].copy_from_slice(&[0xde, 0xad]);
+    std::fs::write(&binary, bytes).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":hex-find text:dead", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0x80);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x00000080"));
+
+    app.submit_project_command(":hex-find hex:0XDE 0XAD", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0x120);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x00000120"));
+
+    app.submit_project_command(":hex-find raw:de ad", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0x120);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x00000120"));
+
+    app.submit_project_command(":hex-find text:\"admin password\"", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0xc0);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x000000c0"));
+
+    app.submit_project_command(
+        ":hex-find string:\"admin password\"",
+        &mut snapshot,
+        &project,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0xc0);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x000000c0"));
+
+    app.submit_project_command(":hex-find admin password", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0xc0);
+    assert!(app.status_line.contains(
+        "hex find: match at file offset 0x000000c0 for 61 64 6d 69 6e 20 70 61 73 73 77 6f 72 64"
+    ));
+
+    app.submit_project_command(":hex-find str:dead", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0x80);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x00000080"));
+}
+
+#[test]
+fn hex_search_decodes_quoted_text_escape_sequences() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("escaped-text-needles.bin");
+    let mut bytes = vec![0_u8; 768];
+    bytes[0x100..0x10c].copy_from_slice(br#"admin "root""#);
+    bytes[0x180..0x18c].copy_from_slice(br#"path\to\file"#);
+    std::fs::write(&binary, bytes).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(
+        ":hex-find text:\"admin \\\"root\\\"\"",
+        &mut snapshot,
+        &project,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0x100);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x00000100"));
+
+    app.submit_project_command(
+        ":hex-find string:\"path\\\\to\\\\file\"",
+        &mut snapshot,
+        &project,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0x180);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x00000180"));
+
+    let snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    assert!(snapshot.analysis_jobs.iter().any(|job| {
+        job.pass_name == "hex.find"
+            && job
+                .metadata_summary
+                .contains("needle=text:\"admin \\\"root\\\"\"")
+            && job.metadata_summary.contains("mode=text")
+            && job.metadata_summary.contains("len=12")
+            && job.metadata_summary.contains("offset=0x00000100")
+    }));
+    assert!(snapshot.analysis_jobs.iter().any(|job| {
+        job.pass_name == "hex.find"
+            && job
+                .metadata_summary
+                .contains("needle=text:\"path\\\\to\\\\file\"")
+            && job.metadata_summary.contains("mode=text")
+            && job.metadata_summary.contains("len=12")
+            && job.metadata_summary.contains("offset=0x00000180")
+    }));
+}
+
+#[test]
+fn hex_search_decodes_quoted_text_control_escapes() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("escaped-control-text.bin");
+    let mut bytes = vec![0_u8; 768];
+    bytes[0x220..0x230].copy_from_slice(b"line1\nline2\tend\r");
+    std::fs::write(&binary, bytes).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(
+        ":hex-find text:\"line1\\nline2\\tend\\r\"",
+        &mut snapshot,
+        &project,
+    )
+    .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0x220);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x00000220"));
+    let snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let job = snapshot
+        .analysis_jobs
+        .iter()
+        .find(|job| job.pass_name == "hex.find")
+        .expect("hex.find job should be recorded");
+    assert!(job
+        .metadata_summary
+        .contains("needle=text:\"line1\\nline2\\tend\\r\""));
+    assert!(job.metadata_summary.contains("mode=text"));
+    assert!(job.metadata_summary.contains("len=16"));
+    assert!(job.metadata_summary.contains("offset=0x00000220"));
+}
+
+#[test]
+fn hex_search_decodes_quoted_text_hex_byte_escapes() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("escaped-hex-byte-text.bin");
+    let mut bytes = vec![0_u8; 768];
+    bytes[0x40..0x45].copy_from_slice(b"MZ\0PE");
+    bytes[0x120..0x125].copy_from_slice(&[b'A', b'P', b'I', 0xff, b'!']);
+    std::fs::write(&binary, bytes).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":hex 0x40", &mut snapshot, &project)
+        .unwrap();
+    app.submit_project_command(":hex-search text:\"MZ\\0PE\"", &mut snapshot, &project)
+        .unwrap();
+
+    assert!(app.status_line.contains(
+        "hex search: match at file offset 0x00000040 (window +0x0) for text:\"MZ\\x00PE\""
+    ));
+    assert!(app
+        .status_line
+        .contains("scanned 256/768 bytes in current window 0x00000040-0x0000013f"));
+
+    app.submit_project_command(":hex-search text:\"MZ\\x00PE\"", &mut snapshot, &project)
+        .unwrap();
+
+    assert!(app.status_line.contains(
+        "hex search: match at file offset 0x00000040 (window +0x0) for text:\"MZ\\x00PE\""
+    ));
+    assert!(app
+        .status_line
+        .contains("scanned 256/768 bytes in current window 0x00000040-0x0000013f"));
+
+    app.submit_project_command(":hex-search text:\"API\\xff!\"", &mut snapshot, &project)
+        .unwrap();
+
+    assert!(app.status_line.contains(
+        "hex search: match at file offset 0x00000120 (window +0xe0) for text:\"API\\xff!\""
+    ));
+    assert!(app
+        .status_line
+        .contains("scanned 256/768 bytes in current window 0x00000040-0x0000013f"));
+
+    app.submit_project_command(":hex-find text:\"API\\xff!\"", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0x120);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x00000120 for text:\"API\\xff!\""));
+    let snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let job = snapshot
+        .analysis_jobs
+        .iter()
+        .find(|job| job.pass_name == "hex.find")
+        .expect("hex.find job should be recorded");
+    assert!(job.metadata_summary.contains("needle=text:\"API\\xff!\""));
+    assert!(job.metadata_summary.contains("mode=text"));
+    assert!(job.metadata_summary.contains("len=5"));
+    assert!(job.metadata_summary.contains("offset=0x00000120"));
+}
+
+#[test]
+fn hex_search_keeps_malformed_hex_byte_escapes_literal() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("literal-malformed-hex-byte-text.bin");
+    let mut bytes = vec![0_u8; 512];
+    bytes[0x160..0x167].copy_from_slice(br"bad\xZZ");
+    std::fs::write(&binary, bytes).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":hex-find text:\"bad\\xZZ\"", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0x160);
+    assert!(app
+        .status_line
+        .contains("hex find: match at file offset 0x00000160"));
+    let snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let job = snapshot
+        .analysis_jobs
+        .iter()
+        .find(|job| job.pass_name == "hex.find")
+        .expect("hex.find job should be recorded");
+    assert!(job.metadata_summary.contains("needle=text:\"bad\\\\xZZ\""));
+    assert!(job.metadata_summary.contains("mode=text"));
+    assert!(job.metadata_summary.contains("len=7"));
+    assert!(job.metadata_summary.contains("offset=0x00000160"));
+}
+
+#[test]
+fn hex_search_rejects_invalid_explicit_hex_needle() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("invalid-needle.bin");
+    std::fs::write(&binary, vec![0_u8; 128]).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    let err = app
+        .submit_project_command(":hex-find hex:zz", &mut snapshot, &project)
+        .unwrap_err();
+
+    assert_eq!(err.kind, revdeck_core::CommandDiagnosticKind::InvalidSyntax);
+    assert!(err.message.contains("invalid hex search needle"));
+}
+
+#[test]
+fn hex_search_rejects_empty_explicit_text_needle() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("empty-text-needle.bin");
+    std::fs::write(&binary, vec![0_u8; 128]).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    let err = app
+        .submit_project_command(":hex-find text:\"\"", &mut snapshot, &project)
+        .unwrap_err();
+
+    assert_eq!(
+        err.kind,
+        revdeck_core::CommandDiagnosticKind::MissingArgument
+    );
+    assert!(err.message.contains("missing required argument `needle`"));
+}
+
+#[test]
+fn hex_search_rejects_empty_explicit_hex_needle_as_missing_argument() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("empty-hex-needle.bin");
+    std::fs::write(&binary, vec![0_u8; 128]).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    let err = app
+        .submit_project_command(":hex-find hex:", &mut snapshot, &project)
+        .unwrap_err();
+
+    assert_eq!(
+        err.kind,
+        revdeck_core::CommandDiagnosticKind::MissingArgument
+    );
+    assert!(err.message.contains("missing required argument `needle`"));
+}
+
+#[test]
+fn hex_search_rejects_empty_explicit_raw_needle_as_missing_argument() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("empty-raw-needle.bin");
+    std::fs::write(&binary, vec![0_u8; 128]).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    let err = app
+        .submit_project_command(":hex-find raw:", &mut snapshot, &project)
+        .unwrap_err();
+
+    assert_eq!(
+        err.kind,
+        revdeck_core::CommandDiagnosticKind::MissingArgument
+    );
+    assert!(err.message.contains("missing required argument `needle`"));
+}
+
+#[test]
+fn hex_search_supports_case_insensitive_explicit_needle_prefixes() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("case-prefix-needle.bin");
+    let mut bytes = vec![0_u8; 512];
+    bytes[0x90..0x95].copy_from_slice(b"Admin");
+    bytes[0x150..0x152].copy_from_slice(&[0xde, 0xad]);
+    std::fs::write(&binary, bytes).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":hex-find TEXT:Admin", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0x90);
+
+    app.submit_project_command(":hex-find ascii:Admin", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0x90);
+
+    app.submit_project_command(":hex-find HEX:de ad", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(snapshot.hex.base_offset, 0x150);
+}
+
+#[test]
+fn hex_search_rejects_empty_explicit_ascii_needle_as_missing_argument() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("empty-ascii-needle.bin");
+    std::fs::write(&binary, vec![0_u8; 128]).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    let err = app
+        .submit_project_command(":hex-find ascii:", &mut snapshot, &project)
+        .unwrap_err();
+
+    assert_eq!(
+        err.kind,
+        revdeck_core::CommandDiagnosticKind::MissingArgument
+    );
+    assert!(err.message.contains("missing required argument `needle`"));
+}
+
+#[test]
+fn hex_search_rejects_empty_explicit_string_needle_as_missing_argument() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("empty-string-needle.bin");
+    std::fs::write(&binary, vec![0_u8; 128]).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    let err = app
+        .submit_project_command(":hex-find string:", &mut snapshot, &project)
+        .unwrap_err();
+
+    assert_eq!(
+        err.kind,
+        revdeck_core::CommandDiagnosticKind::MissingArgument
+    );
+    assert!(err.message.contains("missing required argument `needle`"));
+}
+
+#[test]
+fn hex_search_job_is_visible_in_jobs_inspector() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("hex-job.bin");
+    let mut bytes = vec![0_u8; 640];
+    bytes[0x180..0x184].copy_from_slice(&[0xca, 0xfe, 0xba, 0xbe]);
+    std::fs::write(&binary, bytes).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":hex-find ca fe ba be", &mut snapshot, &project)
+        .unwrap();
+
+    let snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Jobs), &snapshot)
+        .unwrap();
+    app.main_cursor = snapshot
+        .analysis_jobs
+        .iter()
+        .position(|job| job.pass_name == "hex.find")
+        .expect("hex.find job should be present");
+    app.apply_action(TuiAction::FocusPane(PaneFocus::Inspector), &snapshot)
+        .unwrap();
+    let backend = TestBackend::new(150, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+    let normalized = normalized_text(&text);
+
+    assert!(text.contains("hex.find"));
+    assert!(text.contains("Hex search job"));
+    assert!(text.contains("Needle: ca fe ba be"));
+    assert!(text.contains("Needle mode: auto"));
+    assert!(text.contains("Needle length: 4 bytes"));
+    assert!(text.contains("Offset space: file"));
+    assert!(normalized.contains("Scanned: 640/640 bytes in 1 chunk"));
+    assert!(text.contains("Result: match"));
+    assert!(text.contains("Result navigation: :hex 0x180"));
+    assert!(text.contains("Result offset: 0x00000180"));
+    assert!(text.contains("Cancel state: not_requested"));
+}
+
+#[test]
+fn hex_search_skipped_job_shows_no_match_in_jobs_inspector() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("hex-no-match-job.bin");
+    std::fs::write(&binary, vec![0_u8; 320]).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":hex-find hex:ff ee", &mut snapshot, &project)
+        .unwrap();
+
+    let snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Jobs), &snapshot)
+        .unwrap();
+    app.main_cursor = snapshot
+        .analysis_jobs
+        .iter()
+        .position(|job| job.pass_name == "hex.find")
+        .expect("hex.find job should be present");
+    app.apply_action(TuiAction::FocusPane(PaneFocus::Inspector), &snapshot)
+        .unwrap();
+    let backend = TestBackend::new(150, 36);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+    let normalized = normalized_text(&text);
+
+    assert!(text.contains("hex.find"));
+    assert!(text.contains("Needle: hex:ff ee"));
+    assert!(text.contains("Needle mode: hex"));
+    assert!(normalized.contains("Scanned: 320/320 bytes in 1 chunk"));
+    assert!(text.contains("Result: no match"));
+    assert!(text.contains("Result navigation: no match"));
+}
+
+#[test]
+fn hex_viewer_can_jump_from_selected_object_file_offset() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("offset-sync.bin");
+    std::fs::write(&binary, vec![0_u8; 512]).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let artifact = snapshot
+        .overview
+        .artifact
+        .clone()
+        .expect("registered artifact");
+    let offset_object = ObjectRef::new(
+        ObjectKind::String,
+        StableObjectKey::string(&artifact.key, 0x120, None, "offset marker").unwrap(),
+    );
+    snapshot.strings = vec![ObjectSummary {
+        object_ref: offset_object.clone(),
+        artifact_key: Some(artifact.key.to_string()),
+        display_name: Some("offset marker".to_string()),
+        address: None,
+        size: Some(12),
+        metadata_json: r#"{"file_offset":288,"encoding":"ascii"}"#.to_string(),
+    }];
+    snapshot
+        .objects
+        .insert(offset_object.clone(), snapshot.strings[0].clone());
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Strings), &snapshot)
+        .unwrap();
+
+    app.submit_project_command(":hex-current", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Hex);
+    assert_eq!(snapshot.hex.base_offset, 0x120);
+    assert!(app
+        .status_line
+        .contains("hex current: match at file offset 0x00000120"));
+}
+
+#[test]
+fn hex_viewer_can_jump_from_real_indexed_string_offset() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("fixtures")
+        .join("binaries")
+        .join("sensitive_imports_elf");
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::import_binary(
+        project.connection(),
+        revdeck_index::ImportOptions::new(temp.path().to_path_buf(), binary),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let indexed_string = snapshot
+        .strings
+        .iter()
+        .find(|summary| {
+            serde_json::from_str::<serde_json::Value>(&summary.metadata_json)
+                .ok()
+                .and_then(|metadata| metadata.get("file_offset").and_then(|value| value.as_u64()))
+                .is_some()
+        })
+        .cloned()
+        .expect("indexed fixture should expose at least one string file offset");
+    let metadata: serde_json::Value = serde_json::from_str(&indexed_string.metadata_json).unwrap();
+    let offset = metadata["file_offset"].as_u64().unwrap();
+    assert_eq!(metadata["offset_space"], "file");
+
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Strings), &snapshot)
+        .unwrap();
+    app.main_cursor = snapshot
+        .strings
+        .iter()
+        .position(|summary| summary.object_ref == indexed_string.object_ref)
+        .unwrap();
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    app.apply_action(TuiAction::PreviousRow, &snapshot).unwrap();
+
+    app.submit_project_command(":hex selected", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Hex);
+    assert_eq!(snapshot.hex.base_offset, offset);
+    assert!(app
+        .status_line
+        .contains(&format!("hex current: match at file offset 0x{offset:08x}")));
+}
+
+#[test]
+fn real_indexed_section_summaries_expose_file_offset_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("fixtures")
+        .join("binaries")
+        .join("minimal_elf");
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::import_binary(
+        project.connection(),
+        revdeck_index::ImportOptions::new(temp.path().to_path_buf(), binary),
+    )
+    .unwrap();
+    let query = ObjectQueryRepository::new(project.connection());
+    let sections = query
+        .search_objects(
+            &revdeck_core::ObjectSearch::new(Some(ObjectKind::Section), "").with_limit(64),
+        )
+        .unwrap();
+    let section = sections
+        .iter()
+        .find(|summary| {
+            serde_json::from_str::<serde_json::Value>(&summary.metadata_json)
+                .ok()
+                .and_then(|metadata| metadata.get("file_offset").and_then(|value| value.as_u64()))
+                .is_some()
+        })
+        .expect("indexed fixture should expose at least one section file offset");
+    let metadata: serde_json::Value = serde_json::from_str(&section.metadata_json).unwrap();
+
+    assert_eq!(metadata["offset_space"], "file");
+    assert!(metadata["file_offset"].as_u64().is_some());
+}
+
+#[test]
+fn hex_viewer_maps_selected_va_to_file_offset_with_section_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("fixtures")
+        .join("binaries")
+        .join("minimal_elf");
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::import_binary(
+        project.connection(),
+        revdeck_index::ImportOptions::new(temp.path().to_path_buf(), binary),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let function = snapshot
+        .functions
+        .iter()
+        .find(|summary| summary.address.is_some())
+        .cloned()
+        .expect("indexed fixture should expose at least one function VA");
+    let ranges = IndexRepository::new(project.connection())
+        .section_offset_mappings(snapshot.overview.artifact.as_ref().unwrap())
+        .unwrap();
+    let expected = revdeck_core::map_va_to_file_offset(function.address.unwrap(), &ranges)
+        .file_offset
+        .expect("function VA should map through indexed section ranges");
+
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Functions), &snapshot)
+        .unwrap();
+    app.main_cursor = snapshot
+        .functions
+        .iter()
+        .position(|summary| summary.object_ref == function.object_ref)
+        .unwrap();
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    app.apply_action(TuiAction::PreviousRow, &snapshot).unwrap();
+
+    app.submit_project_command(":hex current", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Hex);
+    assert_eq!(snapshot.hex.base_offset, expected);
+    assert!(app.status_line.contains("mapped VA"));
+    assert!(app
+        .status_line
+        .contains(&format!("file offset 0x{expected:08x}")));
+}
+
+#[test]
+fn hex_viewer_current_does_not_treat_virtual_address_as_file_offset() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("va-only.bin");
+    std::fs::write(&binary, vec![0_u8; 512]).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let artifact = snapshot
+        .overview
+        .artifact
+        .clone()
+        .expect("registered artifact");
+    let va_object = ObjectRef::new(
+        ObjectKind::Function,
+        StableObjectKey::function(&artifact.key, 0x401000, Some(16), Some("va_only")).unwrap(),
+    );
+    snapshot.functions = vec![ObjectSummary {
+        object_ref: va_object.clone(),
+        artifact_key: Some(artifact.key.to_string()),
+        display_name: Some("va_only".to_string()),
+        address: Some(0x401000),
+        size: Some(16),
+        metadata_json: r#"{"virtual_address":4198400,"boundary_confidence":"symbol"}"#.to_string(),
+    }];
+    snapshot
+        .objects
+        .insert(va_object.clone(), snapshot.functions[0].clone());
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Functions), &snapshot)
+        .unwrap();
+
+    app.submit_project_command(":open-hex current", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Functions);
+    assert_eq!(snapshot.hex.base_offset, 0);
+    assert!(app
+        .status_line
+        .contains("no indexed section ranges can prove"));
+}
+
+#[test]
+fn hex_viewer_refuses_ambiguous_va_to_file_offset_mapping() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("ambiguous-va.bin");
+    std::fs::write(&binary, vec![0_u8; 1024]).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let artifact = snapshot
+        .overview
+        .artifact
+        .clone()
+        .expect("registered artifact");
+    let function = ObjectRef::new(
+        ObjectKind::Function,
+        StableObjectKey::function(&artifact.key, 0x401040, Some(16), Some("ambiguous")).unwrap(),
+    );
+    snapshot.functions = vec![ObjectSummary {
+        object_ref: function.clone(),
+        artifact_key: Some(artifact.key.to_string()),
+        display_name: Some("ambiguous".to_string()),
+        address: Some(0x401040),
+        size: Some(16),
+        metadata_json: r#"{"boundary_confidence":"synthetic"}"#.to_string(),
+    }];
+    snapshot
+        .objects
+        .insert(function.clone(), snapshot.functions[0].clone());
+    let index_repo = IndexRepository::new(project.connection());
+    let object_repo = ObjectRepository::new(project.connection());
+    for (name, va, offset) in [(".text", 0x401000, 0x200), (".overlap", 0x401020, 0x300)] {
+        let section = ObjectRef::new(
+            ObjectKind::Section,
+            StableObjectKey::section(&artifact.key, name, va, 0x80).unwrap(),
+        );
+        object_repo
+            .upsert_object(&StoredObject {
+                object_ref: section.clone(),
+                artifact_key: Some(artifact.key.to_string()),
+                display_name: Some(name.to_string()),
+                address: Some(va),
+                size: Some(0x80),
+                source_run_id: None,
+                metadata_json: "{}".to_string(),
+            })
+            .unwrap();
+        index_repo
+            .upsert_section(&SectionRecord {
+                object_ref: section,
+                name: name.to_string(),
+                virtual_address: Some(va),
+                file_offset: Some(offset),
+                size: 0x80,
+                flags: "AX".to_string(),
+                entropy: None,
+            })
+            .unwrap();
+    }
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Functions), &snapshot)
+        .unwrap();
+
+    app.submit_project_command(":hex current", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Functions);
+    assert_eq!(snapshot.hex.base_offset, 0);
+    assert!(app.status_line.contains("multiple indexed sections"));
+}
+
+#[test]
+fn hex_viewer_persists_bookmarks_and_byte_notes() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("byte-notes.bin");
+    std::fs::write(&binary, vec![0_u8; 512]).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let artifact = snapshot
+        .hex
+        .artifact
+        .clone()
+        .expect("registered artifact should be loaded in hex view");
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.submit_project_command(":hex 0x20", &mut snapshot, &project)
+        .unwrap();
+
+    app.submit_project_command(
+        ":hex-bookmark current packet-header",
+        &mut snapshot,
+        &project,
+    )
+    .unwrap();
+    app.submit_project_command(
+        ":hex-note current review alignment",
+        &mut snapshot,
+        &project,
+    )
+    .unwrap();
+
+    let subject = ObjectRef::new(
+        ObjectKind::Annotation,
+        StableObjectKeyBuilder::new(ObjectKind::Annotation)
+            .component("artifact", artifact.key.as_str())
+            .unwrap()
+            .component("hex_offset", "0000000000000020")
+            .unwrap()
+            .finish()
+            .unwrap(),
+    );
+    let annotations = MemoryRepository::new(project.connection())
+        .list_annotations_for_subject(&subject)
+        .unwrap();
+
+    assert_eq!(annotations.len(), 2);
+    assert!(annotations.iter().any(|item| item.body == "packet-header"));
+    assert!(annotations
+        .iter()
+        .any(|item| item.body == "review alignment"));
+    assert!(app.status_line.contains("hex note: 0x00000020 noted"));
+}
+
+#[test]
+fn hex_viewer_renders_persisted_byte_markers_without_shifting_bytes() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("byte-markers.bin");
+    let mut bytes = vec![0_u8; 512];
+    bytes[0x20..0x24].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+    std::fs::write(&binary, bytes).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.submit_project_command(":hex 0x20", &mut snapshot, &project)
+        .unwrap();
+
+    app.submit_project_command(
+        ":hex-bookmark current packet-header",
+        &mut snapshot,
+        &project,
+    )
+    .unwrap();
+    app.submit_project_command(
+        ":hex-note current review alignment",
+        &mut snapshot,
+        &project,
+    )
+    .unwrap();
+
+    let marked_row = snapshot
+        .hex
+        .rows
+        .iter()
+        .find(|row| row.offset == 0x20)
+        .expect("selected row should remain visible");
+    assert_eq!(marked_row.marker, "1/1");
+    assert!(marked_row.hex.starts_with("de ad be ef"));
+
+    let reloaded = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let reloaded_row = reloaded
+        .hex
+        .rows
+        .iter()
+        .find(|row| row.offset == 0x20)
+        .expect("reloaded window should include the marked row");
+    assert_eq!(reloaded_row.marker, "1/1");
+    assert!(reloaded_row.hex.starts_with("de ad be ef"));
+
+    let mut app = TuiShellState::from_snapshot(&reloaded);
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Hex), &reloaded)
+        .unwrap();
+    app.main_cursor = reloaded
+        .hex
+        .rows
+        .iter()
+        .position(|row| row.offset == 0x20)
+        .unwrap();
+    let backend = TestBackend::new(150, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &reloaded))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("mk"));
+    assert!(text.contains("offset"));
+    assert!(text.contains("1/1"));
+    assert!(text.contains("0x00000020"));
+    assert!(text.contains("de ad be ef"));
+}
+
+#[test]
+fn hex_inspector_shows_selected_offset_notes_source_and_nearby_objects() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("fixtures")
+        .join("binaries")
+        .join("sensitive_imports_elf");
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::import_binary(
+        project.connection(),
+        revdeck_index::ImportOptions::new(temp.path().to_path_buf(), binary),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let string = snapshot
+        .strings
+        .iter()
+        .find_map(|summary| {
+            let metadata: serde_json::Value = serde_json::from_str(&summary.metadata_json).ok()?;
+            let offset = metadata.get("file_offset")?.as_u64()?;
+            Some((summary.clone(), offset))
+        })
+        .expect("fixture should expose a string file offset");
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.submit_project_command(&format!(":hex 0x{:x}", string.1), &mut snapshot, &project)
+        .unwrap();
+    app.submit_project_command(":hex-note current inspect marker", &mut snapshot, &project)
+        .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+    app.submit_project_command(&format!(":hex 0x{:x}", string.1), &mut snapshot, &project)
+        .unwrap();
+    app.main_cursor = snapshot
+        .hex
+        .rows
+        .iter()
+        .position(|row| row.offset == string.1)
+        .unwrap_or(0);
+    app.apply_action(TuiAction::FocusPane(PaneFocus::Inspector), &snapshot)
+        .unwrap();
+    let backend = TestBackend::new(150, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_workspace(frame, &app, &snapshot))
+        .unwrap();
+    let text = buffer_text(&terminal);
+
+    assert!(text.contains("Hex Inspector"));
+    assert!(text.contains(&format!("File offset: 0x{:08x}", string.1)));
+    assert!(text.contains("Source path:"));
+    assert!(text.contains("Byte notes"));
+    assert!(text.contains("note: inspect marker"));
+    assert!(text.contains("Nearby objects"));
+    assert!(text.contains(string.0.label()));
+}
+
+#[test]
+fn cross_lab_offsets_round_trip_through_hex_workflows() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("cross-offsets.bin");
+    let mut bytes = vec![0_u8; 768];
+    bytes[0x40..0x44].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+    bytes[0x120..0x124].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+    bytes[0x200..0x20e].copy_from_slice(b"admin password");
+    std::fs::write(&binary, bytes).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let artifact = snapshot
+        .overview
+        .artifact
+        .clone()
+        .expect("registered artifact");
+    let section = ObjectRef::new(
+        ObjectKind::Section,
+        StableObjectKey::section(&artifact.key, ".data", 0x402000, 0x80).unwrap(),
+    );
+    ObjectRepository::new(project.connection())
+        .upsert_object(&StoredObject {
+            object_ref: section.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some(".data".to_string()),
+            address: Some(0x402000),
+            size: Some(0x80),
+            source_run_id: None,
+            metadata_json: "{}".to_string(),
+        })
+        .unwrap();
+    IndexRepository::new(project.connection())
+        .upsert_section(&SectionRecord {
+            object_ref: section.clone(),
+            name: ".data".to_string(),
+            virtual_address: Some(0x402000),
+            file_offset: Some(0x200),
+            size: 0x80,
+            flags: "WA".to_string(),
+            entropy: None,
+        })
+        .unwrap();
+    let string = ObjectRef::new(
+        ObjectKind::String,
+        StableObjectKey::string(&artifact.key, 0x200, Some(0x402000), "admin password").unwrap(),
+    );
+    ObjectRepository::new(project.connection())
+        .upsert_object(&StoredObject {
+            object_ref: string.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some("admin password".to_string()),
+            address: Some(0x402000),
+            size: Some(14),
+            source_run_id: None,
+            metadata_json: "{}".to_string(),
+        })
+        .unwrap();
+    IndexRepository::new(project.connection())
+        .upsert_string(&StringRecord {
+            object_ref: string.clone(),
+            value: "admin password".to_string(),
+            virtual_address: Some(0x402000),
+            file_offset: 0x200,
+            length: 14,
+            encoding: "ascii".to_string(),
+        })
+        .unwrap();
+    let protocol = ObjectRef::lab_object(
+        ObjectKind::ProtocolField,
+        Some(&artifact.key),
+        "protocol",
+        "sample-1/message-1/credential",
+    )
+    .unwrap();
+    let protocol_summary = ObjectSummary {
+        object_ref: protocol.clone(),
+        artifact_key: Some(artifact.key.to_string()),
+        display_name: Some("credential".to_string()),
+        address: None,
+        size: Some(4),
+        metadata_json:
+            r#"{"lab_id":"protocol","name":"credential","byte_offset":288,"byte_length":4}"#
+                .to_string(),
+    };
+    snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    snapshot.protocol_items.push(protocol_summary.clone());
+    snapshot
+        .objects
+        .insert(protocol.clone(), protocol_summary.clone());
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Strings), &snapshot)
+        .unwrap();
+    app.main_cursor = snapshot
+        .strings
+        .iter()
+        .position(|summary| summary.object_ref == string)
+        .unwrap();
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    app.apply_action(TuiAction::PreviousRow, &snapshot).unwrap();
+    app.submit_project_command(":hex current", &mut snapshot, &project)
+        .unwrap();
+    assert_eq!(snapshot.hex.base_offset, 0x200);
+    assert!(app.status_line.contains("file offset 0x00000200"));
+
+    app.apply_action(TuiAction::SwitchLens(NavigationLens::Protocol), &snapshot)
+        .unwrap();
+    app.main_cursor = snapshot
+        .protocol_items
+        .iter()
+        .position(|summary| summary.object_ref == protocol)
+        .unwrap();
+    app.apply_action(TuiAction::NextRow, &snapshot).unwrap();
+    app.apply_action(TuiAction::PreviousRow, &snapshot).unwrap();
+    app.submit_project_command(":hex current", &mut snapshot, &project)
+        .unwrap();
+    assert_eq!(snapshot.hex.base_offset, 0x120);
+    assert!(app.status_line.contains("file offset 0x00000120"));
+
+    app.submit_project_command(
+        ":hex-note current protocol credential",
+        &mut snapshot,
+        &project,
+    )
+    .unwrap();
+    assert_eq!(
+        snapshot
+            .hex
+            .rows
+            .iter()
+            .find(|row| row.offset == 0x120)
+            .unwrap()
+            .marker,
+        "N1"
+    );
+
+    app.submit_project_command(":hex-find de ad be ef", &mut snapshot, &project)
+        .unwrap();
+    assert_eq!(snapshot.hex.base_offset, 0x120);
+    let snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    assert!(snapshot
+        .analysis_jobs
+        .iter()
+        .any(|job| job.pass_name == "hex.find"
+            && job.metadata_summary.contains("needle=de ad be ef")
+            && job.metadata_summary.contains("result=match")
+            && job.metadata_summary.contains("offset=0x00000120")));
+
+    let sections = ObjectQueryRepository::new(project.connection())
+        .search_objects(&revdeck_core::ObjectSearch::new(
+            Some(ObjectKind::Section),
+            ".data",
+        ))
+        .unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&sections[0].metadata_json).unwrap();
+    assert_eq!(metadata["file_offset"], 0x200);
+    assert_eq!(metadata["offset_space"], "file");
+}
+
+#[test]
+fn hex_viewer_clamps_large_file_goto_to_bounded_eof_window() {
+    let temp = tempfile::tempdir().unwrap();
+    let binary = temp.path().join("large.bin");
+    let file = std::fs::File::create(&binary).unwrap();
+    file.set_len(2 * 1024 * 1024 + 123).unwrap();
+    let project = ProjectDatabase::create_or_open(temp.path()).unwrap();
+    revdeck_index::register_binary_for_analysis(
+        project.connection(),
+        revdeck_index::ImportOptions::with_profile(
+            temp.path().to_path_buf(),
+            binary,
+            AnalysisProfile::Quick,
+        ),
+    )
+    .unwrap();
+    let mut snapshot = WorkspaceSnapshot::load_from_project(&project).unwrap();
+    let mut app = TuiShellState::from_snapshot(&snapshot);
+
+    app.submit_project_command(":hex 0xffffffff", &mut snapshot, &project)
+        .unwrap();
+
+    assert_eq!(app.active_lens, NavigationLens::Hex);
+    assert_eq!(snapshot.hex.file_size, Some(2 * 1024 * 1024 + 123));
+    assert_eq!(snapshot.hex.base_offset, (2 * 1024 * 1024 + 123) - 256);
+    assert_eq!(snapshot.hex.rows.len(), 16);
+    assert!(snapshot.hex.rows[0].offset < 2 * 1024 * 1024 + 123);
+    assert!(app.status_line.contains("rows=16"));
 }
 
 #[test]

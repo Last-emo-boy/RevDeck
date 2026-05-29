@@ -48,10 +48,11 @@ pub use radar::{
     SIGNAL_XREF_COUNT,
 };
 pub use view_models::{
-    AnalysisJobDetail, AnalysisJobDetailItem, AnalysisJobRow, AnalysisJobsSummary,
-    DiffArtifactSnapshot, DiffChangeKind, DiffComparableObject, DiffComparableRelation,
-    DiffEntityKind, DiffRow, DiffSummaryViewModel, EvidenceNavigationItem, FunctionRadarRow,
-    FunctionRadarViewModel, GraphEdgeDetail, GraphLabViewModel, GraphPathRow,
-    GraphRelationFilterRow, HexByteRow, HexViewModel, InspectorViewModel, LabSummary,
-    LatestAnalysisJob, OverviewViewModel, ScoreReasonView, TriageActionRow, TriageBoardViewModel,
+    map_va_to_file_offset, AnalysisJobDetail, AnalysisJobDetailItem, AnalysisJobRow,
+    AnalysisJobsSummary, DiffArtifactSnapshot, DiffChangeKind, DiffComparableObject,
+    DiffComparableRelation, DiffEntityKind, DiffRow, DiffSummaryViewModel, EvidenceNavigationItem,
+    FunctionRadarRow, FunctionRadarViewModel, GraphEdgeDetail, GraphLabViewModel, GraphPathRow,
+    GraphRelationFilterRow, HexByteRow, HexOffsetMapping, HexOffsetMappingRange,
+    HexOffsetMappingStatus, HexViewModel, InspectorViewModel, LabSummary, LatestAnalysisJob,
+    OverviewViewModel, ScoreReasonView, TriageActionRow, TriageBoardViewModel,
 };

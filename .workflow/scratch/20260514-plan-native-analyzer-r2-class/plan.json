@@ -1,7 +1,7 @@
 {
   "id": "20260514-plan-native-analyzer-r2-class",
   "title": "Native Analyzer Reverse Engineering Roadmap",
-  "status": "in_progress",
+  "status": "completed",
   "source_brainstorm": ".workflow/.csv-wave/20260514-brainstorm-native-r2-class-revdeck/context.md",
   "objective": "Evolve RevDeck toward an r2-class reverse engineering product through native analysis only, without external compatibility adapters.",
   "non_goals": [
@@ -59,5 +59,11 @@
     "cargo clippy --workspace --all-targets -- -D warnings",
     "cargo test --workspace",
     "external adapter grep audit returns no active product references"
-  ]
+  ],
+  "execution": {
+    "status": "completed",
+    "session": ".workflow/.csv-wave/20260514-execute-native-cfg-foundation",
+    "completed_at": "2026-05-14T00:35:40+08:00",
+    "notes": "TASK-001 through TASK-004 are completed; native CFG foundation verification recorded in execution context."
+  }
 }

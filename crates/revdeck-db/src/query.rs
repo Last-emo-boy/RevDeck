@@ -408,12 +408,15 @@ impl ObjectGraphQuery for ObjectQueryRepository<'_> {
         self.connection
             .query_row(
                 "SELECT o.object_key, o.kind, o.artifact_key, coalesce(rn.body, o.display_name),
-                    o.address, o.size, o.metadata_json
+                    o.address, o.size, o.metadata_json,
+                    st.file_offset, sec.file_offset
                 FROM objects o
                 LEFT JOIN annotations rn
                   ON rn.subject_object_key = o.object_key
                  AND rn.subject_object_kind = o.kind
                  AND rn.annotation_kind = 'rename'
+                LEFT JOIN strings st ON st.object_key = o.object_key
+                LEFT JOIN sections sec ON sec.object_key = o.object_key
                 WHERE o.object_key = ?1 AND o.kind = ?2
                 ORDER BY rn.updated_at DESC
                 LIMIT 1",
@@ -434,13 +437,15 @@ impl ObjectGraphQuery for ObjectQueryRepository<'_> {
                 "SELECT DISTINCT
                     o.object_key, o.kind, o.artifact_key, coalesce(rn.body, o.display_name),
                     o.address, o.size,
-                    o.metadata_json
+                    o.metadata_json,
+                    st.file_offset, sec.file_offset
                 FROM objects o
                 LEFT JOIN annotations rn
                   ON rn.subject_object_key = o.object_key
                  AND rn.subject_object_kind = o.kind
                  AND rn.annotation_kind = 'rename'
                 LEFT JOIN strings st ON st.object_key = o.object_key
+                LEFT JOIN sections sec ON sec.object_key = o.object_key
                 LEFT JOIN imports im ON im.object_key = o.object_key
                 LEFT JOIN functions fn ON fn.object_key = o.object_key
                 LEFT JOIN xrefs xr ON xr.object_key = o.object_key
@@ -553,17 +558,44 @@ impl ObjectGraphQuery for ObjectQueryRepository<'_> {
 fn map_object_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<ObjectSummary> {
     let key: String = row.get(0)?;
     let kind: String = row.get(1)?;
+    let kind: ObjectKind = kind.parse().map_err(from_core_error)?;
+    let metadata_json: String = row.get(6)?;
+    let string_file_offset = row.get::<_, Option<i64>>(7)?.map(from_i64);
+    let section_file_offset = row.get::<_, Option<i64>>(8)?.map(from_i64);
+    let metadata_json = match kind {
+        ObjectKind::String => enrich_file_offset_metadata(metadata_json, string_file_offset),
+        ObjectKind::Section => enrich_file_offset_metadata(metadata_json, section_file_offset),
+        _ => metadata_json,
+    };
     Ok(ObjectSummary {
-        object_ref: ObjectRef::new(
-            kind.parse().map_err(from_core_error)?,
-            key.parse().map_err(from_core_error)?,
-        ),
+        object_ref: ObjectRef::new(kind, key.parse().map_err(from_core_error)?),
         artifact_key: row.get(2)?,
         display_name: row.get(3)?,
         address: row.get::<_, Option<i64>>(4)?.map(from_i64),
         size: row.get::<_, Option<i64>>(5)?.map(from_i64),
-        metadata_json: row.get(6)?,
+        metadata_json,
     })
+}
+
+fn enrich_file_offset_metadata(raw_metadata: String, file_offset: Option<u64>) -> String {
+    let Some(file_offset) = file_offset else {
+        return raw_metadata;
+    };
+    let mut metadata = match serde_json::from_str::<serde_json::Value>(&raw_metadata) {
+        Ok(serde_json::Value::Object(object)) => serde_json::Value::Object(object),
+        Ok(value) => serde_json::json!({ "metadata": value }),
+        Err(_) => serde_json::json!({ "raw": raw_metadata.clone() }),
+    };
+    let Some(object) = metadata.as_object_mut() else {
+        return raw_metadata;
+    };
+    object
+        .entry("file_offset".to_string())
+        .or_insert_with(|| serde_json::Value::Number(file_offset.into()));
+    object
+        .entry("offset_space".to_string())
+        .or_insert_with(|| serde_json::Value::String("file".to_string()));
+    serde_json::to_string(&metadata).unwrap_or(raw_metadata)
 }
 
 fn from_i64(value: i64) -> u64 {
@@ -582,8 +614,8 @@ fn from_core_error(err: revdeck_core::RevDeckError) -> rusqlite::Error {
 mod tests {
     use super::*;
     use crate::{
-        migrations::migrate, ArtifactRecord, ArtifactRepository, ObjectRepository, StoredEdge,
-        StoredObject,
+        migrations::migrate, ArtifactRecord, ArtifactRepository, IndexRepository, ObjectRepository,
+        SectionRecord, StoredEdge, StoredObject, StringRecord,
     };
     use revdeck_core::{EdgeKind, StableObjectKey};
     use rusqlite::Connection;
@@ -722,6 +754,94 @@ mod tests {
             .nodes
             .iter()
             .any(|node| node.object_ref == import && node.depth == 2));
+    }
+
+    #[test]
+    fn object_summary_queries_include_indexed_file_offsets() {
+        let connection = migrated_connection();
+        let repo = ObjectRepository::new(&connection);
+        let artifact = ObjectRef::artifact("abc123", "fixture").unwrap();
+        ArtifactRepository::new(&connection)
+            .upsert_artifact(&ArtifactRecord {
+                object_ref: artifact.clone(),
+                display_name: "fixture".to_string(),
+                source_path: "fixture".to_string(),
+                stored_path: None,
+                sha256: "abc123".to_string(),
+                size: 512,
+                kind: "binary".to_string(),
+                format: "elf".to_string(),
+                architecture: "x86_64".to_string(),
+                import_status: "indexed".to_string(),
+                created_at: datetime!(2026-05-13 00:00 UTC),
+            })
+            .unwrap();
+        seed_object(&repo, artifact.clone(), None, "fixture", None);
+        let index_repo = IndexRepository::new(&connection);
+
+        let section = seed_object(
+            &repo,
+            ObjectRef::new(
+                ObjectKind::Section,
+                StableObjectKey::section(&artifact.key, ".text", 0x401000, 0x80).unwrap(),
+            ),
+            Some(artifact.key.as_str()),
+            ".text",
+            Some(0x401000),
+        );
+        index_repo
+            .upsert_section(&SectionRecord {
+                object_ref: section.clone(),
+                name: ".text".to_string(),
+                virtual_address: Some(0x401000),
+                file_offset: Some(0x40),
+                size: 0x80,
+                flags: "AX".to_string(),
+                entropy: None,
+            })
+            .unwrap();
+
+        let string = ObjectRef::new(
+            ObjectKind::String,
+            StableObjectKey::string(&artifact.key, 0x120, Some(0x402000), "password").unwrap(),
+        );
+        repo.upsert_object(&StoredObject {
+            object_ref: string.clone(),
+            artifact_key: Some(artifact.key.to_string()),
+            display_name: Some("password".to_string()),
+            address: Some(0x402000),
+            size: Some(8),
+            source_run_id: None,
+            metadata_json: r#"{"encoding":"ascii"}"#.to_string(),
+        })
+        .unwrap();
+        index_repo
+            .upsert_string(&StringRecord {
+                object_ref: string.clone(),
+                value: "password".to_string(),
+                virtual_address: Some(0x402000),
+                file_offset: 0x120,
+                length: 8,
+                encoding: "ascii".to_string(),
+            })
+            .unwrap();
+
+        let query = ObjectQueryRepository::new(&connection);
+        let strings = query
+            .search_objects(&ObjectSearch::new(Some(ObjectKind::String), "password"))
+            .unwrap();
+        assert_eq!(strings.len(), 1);
+        let string_metadata: serde_json::Value =
+            serde_json::from_str(&strings[0].metadata_json).unwrap();
+        assert_eq!(string_metadata["encoding"], "ascii");
+        assert_eq!(string_metadata["file_offset"], 0x120);
+        assert_eq!(string_metadata["offset_space"], "file");
+
+        let loaded_section = query.get_object(&section).unwrap().unwrap();
+        let section_metadata: serde_json::Value =
+            serde_json::from_str(&loaded_section.metadata_json).unwrap();
+        assert_eq!(section_metadata["file_offset"], 0x40);
+        assert_eq!(section_metadata["offset_space"], "file");
     }
 
     #[test]

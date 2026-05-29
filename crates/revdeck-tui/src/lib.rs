@@ -13,13 +13,14 @@ use ratatui::{
     Frame, Terminal,
 };
 use revdeck_core::{
-    pre_export_validation, render_json_bundle, render_markdown, AnalysisJobDetail, AnalysisJobRow,
-    AnalysisJobsSummary, CommandDiagnostic, CommandDiagnosticKind, CommandExecutor, CommandOutcome,
-    CommandParser, CommandResolver, CommandState, ExportFormat, Finding, FindingEvidence,
-    FindingSeverity, FindingStatus, FunctionRadarFilter, FunctionRadarViewModel, FunctionScore,
-    GraphEdgeDetail, GraphLabViewModel, HexViewModel, InspectorViewModel, NavigationEntry,
-    NavigationLens, ObjectGraphQuery, ObjectKind, ObjectRef, ObjectRelation, ObjectSearch,
-    ObjectSummary, QueryError, RelationDirection, RelationFilter, ResolvedCommand, StableObjectKey,
+    map_va_to_file_offset, pre_export_validation, render_json_bundle, render_markdown,
+    AnalysisJobDetail, AnalysisJobRow, AnalysisJobsSummary, AnnotationKind, CommandDiagnostic,
+    CommandDiagnosticKind, CommandExecutor, CommandOutcome, CommandParser, CommandResolver,
+    CommandState, ExportFormat, Finding, FindingEvidence, FindingSeverity, FindingStatus,
+    FunctionRadarFilter, FunctionRadarViewModel, FunctionScore, GraphEdgeDetail, GraphLabViewModel,
+    HexViewModel, InspectorViewModel, NavigationEntry, NavigationLens, ObjectGraphQuery,
+    ObjectKind, ObjectRef, ObjectRelation, ObjectSearch, ObjectSummary, QueryError,
+    RelationDirection, RelationFilter, ResolvedCommand, StableObjectKey, StableObjectKeyBuilder,
     TraversalOptions, TriageBoardViewModel, WORKSPACE_LENSES,
 };
 use revdeck_db::{
@@ -27,6 +28,7 @@ use revdeck_db::{
     FindingRepository, IndexRepository, MemoryRepository, ObjectQueryRepository, ProjectDatabase,
     RadarRepository,
 };
+use rusqlite::OptionalExtension;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
@@ -50,6 +52,7 @@ const GRAPH_LAB_MAX_NODES: usize = 64;
 const GRAPH_LAB_ACTIVE_FILTER: RelationFilter = RelationFilter::All;
 const SNAPSHOT_REFRESH_INTERVAL: Duration = Duration::from_millis(750);
 const HEX_WINDOW_BYTES: usize = 256;
+const HEX_SEARCH_CHUNK_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct WorkspaceSnapshot {
@@ -57,6 +60,7 @@ pub struct WorkspaceSnapshot {
     pub triage: TriageBoardViewModel,
     pub radar: FunctionRadarViewModel,
     pub scores: Vec<FunctionScore>,
+    pub sections: Vec<ObjectSummary>,
     pub functions: Vec<ObjectSummary>,
     pub strings: Vec<ObjectSummary>,
     pub imports: Vec<ObjectSummary>,
@@ -91,6 +95,7 @@ impl WorkspaceSnapshot {
             triage,
             radar,
             scores: Vec::new(),
+            sections: Vec::new(),
             functions: Vec::new(),
             strings: Vec::new(),
             imports: Vec::new(),
@@ -190,9 +195,17 @@ impl WorkspaceSnapshot {
         let analysis_jobs_summary = AnalysisJobsSummary::from_rows(&analysis_jobs);
         let hex = artifact
             .as_ref()
-            .map(|artifact| load_hex_view(project.info().root_dir.as_path(), artifact, 0))
+            .map(|artifact| {
+                load_hex_view(
+                    project.info().root_dir.as_path(),
+                    artifact,
+                    0,
+                    Some(connection),
+                )
+            })
             .unwrap_or_else(|| HexViewModel::empty("artifact metadata missing"));
 
+        let sections = search_kind(&query, ObjectKind::Section, 500)?;
         let functions = search_kind(&query, ObjectKind::Function, 500)?;
         let basic_blocks = search_kind(&query, ObjectKind::BasicBlock, 1000)?;
         let instructions = search_kind(&query, ObjectKind::Instruction, 1000)?;
@@ -229,6 +242,7 @@ impl WorkspaceSnapshot {
         let mut objects = BTreeMap::new();
         for object in artifacts
             .into_iter()
+            .chain(sections.iter().cloned())
             .chain(functions.iter().cloned())
             .chain(basic_blocks.into_iter())
             .chain(instructions.into_iter())
@@ -267,6 +281,7 @@ impl WorkspaceSnapshot {
             triage,
             radar,
             scores,
+            sections,
             functions,
             strings,
             imports,
@@ -359,6 +374,7 @@ impl WorkspaceSnapshot {
         })
         .to_string();
         let functions = vec![function_summary];
+        let sections = Vec::new();
         let strings = vec![summary(
             string.clone(),
             "admin password",
@@ -1284,6 +1300,7 @@ impl WorkspaceSnapshot {
             triage,
             radar,
             scores,
+            sections,
             functions,
             strings,
             imports,
@@ -1545,7 +1562,12 @@ impl ObjectGraphQuery for WorkspaceSnapshot {
     }
 }
 
-fn load_hex_view(project_root: &Path, artifact: &ArtifactRecord, base_offset: u64) -> HexViewModel {
+fn load_hex_view(
+    project_root: &Path,
+    artifact: &ArtifactRecord,
+    base_offset: u64,
+    connection: Option<&rusqlite::Connection>,
+) -> HexViewModel {
     let Some(path) = resolve_artifact_bytes_path(project_root, artifact) else {
         return HexViewModel::empty(format!("missing byte source for {}", artifact.display_name));
     };
@@ -1567,7 +1589,7 @@ fn load_hex_view(project_root: &Path, artifact: &ArtifactRecord, base_offset: u6
             ));
         }
     };
-    let base_offset = base_offset.min(file_size);
+    let base_offset = clamp_hex_base_offset(base_offset, file_size);
     if let Err(err) = file.seek(SeekFrom::Start(base_offset)) {
         return HexViewModel::empty(format!(
             "failed to seek byte source {}: {err}",
@@ -1582,13 +1604,107 @@ fn load_hex_view(project_root: &Path, artifact: &ArtifactRecord, base_offset: u6
             path.display()
         ));
     }
-    HexViewModel::from_bytes(
+    let mut hex = HexViewModel::from_bytes(
         artifact.object_ref.clone(),
         path.display().to_string(),
         file_size,
         base_offset,
         &bytes,
-    )
+    );
+    if let Some(connection) = connection {
+        load_hex_markers(connection, &mut hex);
+    }
+    hex
+}
+
+fn clamp_hex_base_offset(requested: u64, file_size: u64) -> u64 {
+    if file_size == 0 {
+        return 0;
+    }
+    if requested >= file_size {
+        return file_size.saturating_sub(HEX_WINDOW_BYTES as u64);
+    }
+    requested
+}
+
+fn load_active_artifact(project: &ProjectDatabase) -> anyhow::Result<Option<ArtifactRecord>> {
+    let artifact = project
+        .connection()
+        .prepare("SELECT object_key FROM artifacts ORDER BY created_at DESC, object_key LIMIT 1")?
+        .query_row([], |row| row.get::<_, String>(0))
+        .optional()
+        .context("failed to load active artifact")?
+        .and_then(|key| {
+            key.parse()
+                .ok()
+                .map(|key| ObjectRef::new(ObjectKind::Artifact, key))
+        });
+    let Some(artifact_ref) = artifact else {
+        return Ok(None);
+    };
+    ArtifactRepository::new(project.connection())
+        .get_artifact(&artifact_ref)
+        .context("failed to load artifact metadata")
+}
+
+fn load_hex_view_from_project(
+    project: &ProjectDatabase,
+    base_offset: u64,
+) -> anyhow::Result<HexViewModel> {
+    let Some(artifact) = load_active_artifact(project)? else {
+        return Ok(HexViewModel::empty("artifact metadata missing"));
+    };
+    Ok(load_hex_view(
+        project.info().root_dir.as_path(),
+        &artifact,
+        base_offset,
+        Some(project.connection()),
+    ))
+}
+
+fn load_hex_markers(connection: &rusqlite::Connection, hex: &mut HexViewModel) {
+    let subjects = hex
+        .rows
+        .iter()
+        .filter_map(|row| hex_offset_subject(hex, row.offset).ok())
+        .collect::<Vec<_>>();
+    let memory = MemoryRepository::new(connection);
+    for (row, subject) in hex.rows.iter_mut().zip(subjects.iter()) {
+        let Ok(annotations) = memory.list_annotations_for_subject(subject) else {
+            continue;
+        };
+        let tag_count = annotations
+            .iter()
+            .filter(|annotation| annotation.kind == AnnotationKind::Tag)
+            .count();
+        let note_count = annotations
+            .iter()
+            .filter(|annotation| annotation.kind == AnnotationKind::Note)
+            .count();
+        row.marker = hex_marker_label(tag_count, note_count);
+        row.marker_details = annotations
+            .iter()
+            .filter(|annotation| {
+                matches!(annotation.kind, AnnotationKind::Tag | AnnotationKind::Note)
+            })
+            .map(|annotation| {
+                format!(
+                    "{}: {}",
+                    annotation.kind.as_str(),
+                    truncate(&annotation.body, 48)
+                )
+            })
+            .collect();
+    }
+}
+
+fn hex_marker_label(tag_count: usize, note_count: usize) -> String {
+    match (tag_count, note_count) {
+        (0, 0) => String::new(),
+        (tag_count, 0) => format!("T{tag_count}"),
+        (0, note_count) => format!("N{note_count}"),
+        (tag_count, note_count) => format!("{tag_count}/{note_count}"),
+    }
 }
 
 fn resolve_artifact_bytes_path(project_root: &Path, artifact: &ArtifactRecord) -> Option<PathBuf> {
@@ -1605,6 +1721,720 @@ fn resolve_artifact_bytes_path(project_root: &Path, artifact: &ArtifactRecord) -
                 project_root.join(path)
             }
         })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HexCommand {
+    Goto(u64),
+    CurrentObject,
+    Search(HexSearchNeedle),
+    FileSearch(HexSearchNeedle),
+    Bookmark(String),
+    Note(String),
+}
+
+fn parse_hex_command(input: &str) -> Result<Option<HexCommand>, CommandDiagnostic> {
+    let command = input.trim().trim_start_matches(':').trim();
+    let Some((name, rest)) = split_command_name(command) else {
+        return Ok(None);
+    };
+    let name = name.to_ascii_lowercase();
+    let rest = rest.trim();
+    match name.as_str() {
+        "hex" | "goto" => {
+            if rest.is_empty() {
+                if name == "hex" {
+                    return Ok(Some(HexCommand::CurrentObject));
+                }
+                return Err(CommandDiagnostic::new(
+                    CommandDiagnosticKind::MissingArgument,
+                    "missing required argument `offset`",
+                ));
+            }
+            if matches!(rest, "current" | "selected") {
+                return Ok(Some(HexCommand::CurrentObject));
+            }
+            Ok(Some(HexCommand::Goto(parse_hex_offset(rest)?)))
+        }
+        "open-hex" | "hex-current" => Ok(Some(HexCommand::CurrentObject)),
+        "hex-search" | "bytes-search" => {
+            if rest.is_empty() {
+                return Err(CommandDiagnostic::new(
+                    CommandDiagnosticKind::MissingArgument,
+                    "missing required argument `needle`",
+                ));
+            }
+            Ok(Some(HexCommand::Search(parse_hex_search_needle(rest)?)))
+        }
+        "hex-find" | "bytes-find" => {
+            if rest.is_empty() {
+                return Err(CommandDiagnostic::new(
+                    CommandDiagnosticKind::MissingArgument,
+                    "missing required argument `needle`",
+                ));
+            }
+            Ok(Some(HexCommand::FileSearch(parse_hex_search_needle(rest)?)))
+        }
+        "hex-bookmark" => {
+            let label = parse_hex_current_text(rest, "label")?;
+            Ok(Some(HexCommand::Bookmark(label)))
+        }
+        "hex-note" => {
+            let note = parse_hex_current_text(rest, "note")?;
+            Ok(Some(HexCommand::Note(note)))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn split_command_name(command: &str) -> Option<(&str, &str)> {
+    if command.is_empty() {
+        return None;
+    }
+    let Some(split_at) = command
+        .char_indices()
+        .find_map(|(index, ch)| ch.is_whitespace().then_some(index))
+    else {
+        return Some((command, ""));
+    };
+    Some((&command[..split_at], &command[split_at..]))
+}
+
+fn parse_hex_offset(value: &str) -> Result<u64, CommandDiagnostic> {
+    let token = value.split_whitespace().next().ok_or_else(|| {
+        CommandDiagnostic::new(
+            CommandDiagnosticKind::MissingArgument,
+            "missing required argument `offset`",
+        )
+    })?;
+    let token = token
+        .strip_prefix("0x")
+        .or_else(|| token.strip_prefix("0X"))
+        .unwrap_or(token);
+    u64::from_str_radix(token, 16)
+        .or_else(|_| token.parse::<u64>())
+        .map_err(|_| {
+            CommandDiagnostic::new(
+                CommandDiagnosticKind::InvalidSyntax,
+                format!("invalid byte offset `{value}`"),
+            )
+        })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HexSearchNeedle {
+    bytes: Vec<u8>,
+    mode: HexSearchNeedleMode,
+    label: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HexSearchNeedleMode {
+    Auto,
+    Hex,
+    Text,
+}
+
+impl HexSearchNeedleMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Hex => "hex",
+            Self::Text => "text",
+        }
+    }
+}
+
+impl HexSearchNeedle {
+    fn auto(bytes: Vec<u8>) -> Self {
+        let label = hex_needle_label(&bytes);
+        Self {
+            bytes,
+            mode: HexSearchNeedleMode::Auto,
+            label,
+        }
+    }
+
+    fn hex(bytes: Vec<u8>) -> Self {
+        let label = format!("hex:{}", hex_needle_label(&bytes));
+        Self {
+            bytes,
+            mode: HexSearchNeedleMode::Hex,
+            label,
+        }
+    }
+
+    fn text(bytes: Vec<u8>) -> Self {
+        Self {
+            label: format!("text:{}", quote_hex_search_bytes(&bytes)),
+            bytes,
+            mode: HexSearchNeedleMode::Text,
+        }
+    }
+}
+
+fn parse_hex_search_needle(value: &str) -> Result<HexSearchNeedle, CommandDiagnostic> {
+    let trimmed = value.trim();
+    if let Some(hex) = strip_hex_needle_prefix(trimmed, &["hex:", "bytes:", "raw:"]) {
+        return parse_hex_bytes_needle(hex.trim(), value).map(HexSearchNeedle::hex);
+    }
+    if let Some(text) = strip_hex_needle_prefix(trimmed, &["text:", "ascii:", "string:", "str:"]) {
+        return parse_text_search_needle(text.trim());
+    }
+    if is_quoted_search_text(trimmed) {
+        return parse_text_search_needle(trimmed);
+    }
+    if trimmed.contains(' ') {
+        let bytes = trimmed
+            .split_whitespace()
+            .map(|token| {
+                let token = token
+                    .strip_prefix("0x")
+                    .or_else(|| token.strip_prefix("0X"))
+                    .unwrap_or(token);
+                u8::from_str_radix(token, 16)
+            })
+            .collect::<Result<Vec<_>, _>>();
+        if let Ok(bytes) = bytes {
+            if !bytes.is_empty() {
+                return Ok(HexSearchNeedle::auto(bytes));
+            }
+        }
+    }
+    let compact = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    if compact.len() >= 2
+        && compact.len() % 2 == 0
+        && compact.chars().all(|ch| ch.is_ascii_hexdigit())
+    {
+        return parse_hex_bytes_needle(compact, value).map(HexSearchNeedle::auto);
+    }
+    Ok(HexSearchNeedle::auto(trimmed.as_bytes().to_vec()))
+}
+
+fn strip_hex_needle_prefix<'value>(value: &'value str, prefixes: &[&str]) -> Option<&'value str> {
+    prefixes.iter().find_map(|prefix| {
+        value
+            .get(..prefix.len())
+            .filter(|candidate| candidate.eq_ignore_ascii_case(prefix))
+            .map(|_| &value[prefix.len()..])
+    })
+}
+
+fn parse_text_search_needle(value: &str) -> Result<HexSearchNeedle, CommandDiagnostic> {
+    let bytes = unquote_search_text(value.trim());
+    if bytes.is_empty() {
+        return Err(CommandDiagnostic::new(
+            CommandDiagnosticKind::MissingArgument,
+            "missing required argument `needle`",
+        ));
+    }
+    Ok(HexSearchNeedle::text(bytes))
+}
+
+fn parse_hex_bytes_needle(value: &str, original: &str) -> Result<Vec<u8>, CommandDiagnostic> {
+    if value.trim().is_empty() {
+        return Err(CommandDiagnostic::new(
+            CommandDiagnosticKind::MissingArgument,
+            "missing required argument `needle`",
+        ));
+    }
+    let bytes = value
+        .split_whitespace()
+        .flat_map(|token| {
+            token
+                .strip_prefix("0x")
+                .or_else(|| token.strip_prefix("0X"))
+                .unwrap_or(token)
+                .as_bytes()
+                .chunks(2)
+                .map(|chunk| std::str::from_utf8(chunk).unwrap_or(""))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    if bytes.is_empty()
+        || bytes
+            .iter()
+            .any(|token| token.len() != 2 || !token.chars().all(|ch| ch.is_ascii_hexdigit()))
+    {
+        return Err(CommandDiagnostic::new(
+            CommandDiagnosticKind::InvalidSyntax,
+            format!("invalid hex search needle `{original}`"),
+        ));
+    }
+    bytes
+        .iter()
+        .map(|token| u8::from_str_radix(token, 16))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| {
+            CommandDiagnostic::new(
+                CommandDiagnosticKind::InvalidSyntax,
+                format!("invalid hex search needle `{original}`"),
+            )
+        })
+}
+
+fn is_quoted_search_text(value: &str) -> bool {
+    (value.starts_with('"') && value.ends_with('"'))
+        || (value.starts_with('\'') && value.ends_with('\''))
+}
+
+fn unquote_search_text(value: &str) -> Vec<u8> {
+    if is_quoted_search_text(value) && value.len() >= 2 {
+        decode_search_text_escapes(&value[1..value.len() - 1])
+    } else {
+        value.as_bytes().to_vec()
+    }
+}
+
+fn decode_search_text_escapes(value: &str) -> Vec<u8> {
+    if !value.contains('\\') {
+        return value.as_bytes().to_vec();
+    }
+    let mut decoded = Vec::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            push_utf8_char(&mut decoded, ch);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => decoded.push(b'\\'),
+            Some('"') => decoded.push(b'"'),
+            Some('\'') => decoded.push(b'\''),
+            Some('n') => decoded.push(b'\n'),
+            Some('r') => decoded.push(b'\r'),
+            Some('t') => decoded.push(b'\t'),
+            Some('0') => decoded.push(0),
+            Some(escape @ ('x' | 'X')) => {
+                let mut lookahead = chars.clone();
+                match (lookahead.next(), lookahead.next()) {
+                    (Some(high), Some(low))
+                        if high.is_ascii_hexdigit() && low.is_ascii_hexdigit() =>
+                    {
+                        chars.next();
+                        chars.next();
+                        decoded.push(hex_escape_value(high, low));
+                    }
+                    _ => {
+                        decoded.push(b'\\');
+                        decoded.push(escape as u8);
+                    }
+                }
+            }
+            Some(next) => {
+                decoded.push(b'\\');
+                push_utf8_char(&mut decoded, next);
+            }
+            None => decoded.push(b'\\'),
+        }
+    }
+    decoded
+}
+
+fn push_utf8_char(bytes: &mut Vec<u8>, ch: char) {
+    let mut buffer = [0; 4];
+    bytes.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
+}
+
+fn hex_escape_value(high: char, low: char) -> u8 {
+    ((high.to_digit(16).unwrap_or(0) as u8) << 4) | low.to_digit(16).unwrap_or(0) as u8
+}
+
+fn quote_hex_search_bytes(value: &[u8]) -> String {
+    let escaped = std::str::from_utf8(value)
+        .map(quote_hex_search_text)
+        .unwrap_or_else(|_| quote_hex_search_raw_bytes(value));
+    format!("\"{escaped}\"")
+}
+
+fn quote_hex_search_text(value: &str) -> String {
+    let mut escaped = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            ch if ch.is_control() => {
+                let mut buffer = [0; 4];
+                for byte in ch.encode_utf8(&mut buffer).as_bytes() {
+                    escaped.push_str(&format!("\\x{byte:02x}"));
+                }
+            }
+            ch => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn quote_hex_search_raw_bytes(value: &[u8]) -> String {
+    let mut escaped = String::new();
+    for byte in value {
+        match byte {
+            b'\\' => escaped.push_str("\\\\"),
+            b'"' => escaped.push_str("\\\""),
+            b'\n' => escaped.push_str("\\n"),
+            b'\r' => escaped.push_str("\\r"),
+            b'\t' => escaped.push_str("\\t"),
+            0x20..=0x7e => escaped.push(*byte as char),
+            byte => escaped.push_str(&format!("\\x{byte:02x}")),
+        }
+    }
+    escaped
+}
+
+fn parse_hex_current_text(value: &str, label: &str) -> Result<String, CommandDiagnostic> {
+    let value = value.trim();
+    let Some(rest) = value
+        .strip_prefix("current")
+        .or_else(|| value.strip_prefix("selected"))
+    else {
+        return Err(CommandDiagnostic::new(
+            CommandDiagnosticKind::InvalidSyntax,
+            format!("expected `current <{label}>`"),
+        ));
+    };
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Err(CommandDiagnostic::new(
+            CommandDiagnosticKind::MissingArgument,
+            format!("missing required argument `{label}`"),
+        ));
+    }
+    Ok(rest.to_string())
+}
+
+fn find_hex_needle(hex: &HexViewModel, needle: &[u8]) -> Option<(usize, u64)> {
+    if needle.is_empty() {
+        return None;
+    }
+    let bytes = hex_window_bytes(hex);
+    bytes
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|index| {
+            let offset = hex.base_offset + index as u64;
+            let row_index = index / hex.bytes_per_row;
+            (row_index, offset)
+        })
+}
+
+fn hex_window_bytes(hex: &HexViewModel) -> Vec<u8> {
+    hex.rows
+        .iter()
+        .flat_map(|row| row.hex.split_whitespace())
+        .filter_map(|token| u8::from_str_radix(token, 16).ok())
+        .collect()
+}
+
+fn hex_window_scan_summary(hex: &HexViewModel) -> String {
+    let bytes_scanned = hex_window_bytes(hex).len();
+    let window_end = if bytes_scanned == 0 {
+        hex.base_offset
+    } else {
+        hex.base_offset + bytes_scanned.saturating_sub(1) as u64
+    };
+    let window_range = format!("0x{:08x}-0x{:08x}", hex.base_offset, window_end);
+    match hex.file_size {
+        Some(file_size) => {
+            format!("scanned {bytes_scanned}/{file_size} bytes in current window {window_range}")
+        }
+        None => format!("scanned {bytes_scanned} bytes in current window {window_range}"),
+    }
+}
+
+fn hex_needle_label(needle: &[u8]) -> String {
+    needle
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn selected_object_file_offset(snapshot: &WorkspaceSnapshot, selected: &ObjectRef) -> Option<u64> {
+    let summary = selected_object_summary(snapshot, selected)?;
+    let metadata = parsed_metadata(&summary.metadata_json)?;
+    metadata_file_offset(&metadata)
+}
+
+fn selected_object_summary<'snapshot>(
+    snapshot: &'snapshot WorkspaceSnapshot,
+    selected: &ObjectRef,
+) -> Option<&'snapshot ObjectSummary> {
+    snapshot.objects.get(selected).or_else(|| {
+        snapshot
+            .diff_deltas
+            .iter()
+            .chain(snapshot.trace_items.iter())
+            .chain(snapshot.firmware_files.iter())
+            .chain(snapshot.crash_items.iter())
+            .chain(snapshot.protocol_items.iter())
+            .chain(snapshot.annotations.iter())
+            .find(|summary| summary.object_ref == *selected)
+    })
+}
+
+fn selected_object_virtual_address(
+    snapshot: &WorkspaceSnapshot,
+    selected: &ObjectRef,
+) -> Option<u64> {
+    let summary = selected_object_summary(snapshot, selected)?;
+    if let Some(address) = summary.address {
+        return Some(address);
+    }
+    let metadata = parsed_metadata(&summary.metadata_json)?;
+    for key in ["virtual_address", "va", "address", "rva"] {
+        if let Some(address) = metadata.get(key).and_then(metadata_u64) {
+            return Some(address);
+        }
+    }
+    None
+}
+
+fn metadata_file_offset(metadata: &serde_json::Value) -> Option<u64> {
+    for key in ["file_offset", "byte_offset", "start_offset"] {
+        if let Some(offset) = metadata.get(key).and_then(metadata_u64) {
+            return Some(offset);
+        }
+    }
+    let offset_space = metadata
+        .get("offset_space")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| value.to_ascii_lowercase());
+    if matches!(offset_space.as_deref(), Some("file" | "byte" | "bytes")) {
+        return metadata.get("offset").and_then(metadata_u64);
+    }
+    None
+}
+
+fn metadata_u64(value: &serde_json::Value) -> Option<u64> {
+    if let Some(value) = value.as_u64() {
+        return Some(value);
+    }
+    let text = value.as_str()?.trim();
+    let text = text
+        .strip_prefix("0x")
+        .or_else(|| text.strip_prefix("0X"))
+        .unwrap_or(text);
+    u64::from_str_radix(text, 16)
+        .or_else(|_| text.parse::<u64>())
+        .ok()
+}
+
+fn current_hex_offset(snapshot: &WorkspaceSnapshot, cursor: usize) -> Option<u64> {
+    snapshot.hex.rows.get(cursor).map(|row| row.offset)
+}
+
+fn hex_offset_subject(hex: &HexViewModel, offset: u64) -> Result<ObjectRef, CommandDiagnostic> {
+    let artifact = hex.artifact.as_ref().ok_or_else(|| {
+        CommandDiagnostic::new(
+            CommandDiagnosticKind::QueryFailed,
+            "hex bookmark: artifact metadata missing",
+        )
+    })?;
+    let key = StableObjectKeyBuilder::new(ObjectKind::Annotation)
+        .component("artifact", artifact.key.as_str())
+        .and_then(|builder| builder.component("hex_offset", format!("{offset:016x}")))
+        .map_err(|err| {
+            CommandDiagnostic::new(
+                CommandDiagnosticKind::InvalidSyntax,
+                format!("invalid hex bookmark key: {err}"),
+            )
+        })?
+        .finish()
+        .map_err(|err| {
+            CommandDiagnostic::new(
+                CommandDiagnosticKind::InvalidSyntax,
+                format!("invalid hex bookmark key: {err}"),
+            )
+        })?;
+    Ok(ObjectRef::new(ObjectKind::Annotation, key))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HexFindResult {
+    result_offset: Option<u64>,
+    bytes_scanned: u64,
+    chunk_count: u64,
+    file_size: u64,
+}
+
+fn find_hex_needle_in_project(
+    project: &ProjectDatabase,
+    needle: &[u8],
+) -> anyhow::Result<HexFindResult> {
+    if needle.is_empty() {
+        return Ok(HexFindResult {
+            result_offset: None,
+            bytes_scanned: 0,
+            chunk_count: 0,
+            file_size: 0,
+        });
+    }
+    let Some(artifact) = load_active_artifact(project)? else {
+        anyhow::bail!("artifact metadata missing");
+    };
+    let Some(path) = resolve_artifact_bytes_path(project.info().root_dir.as_path(), &artifact)
+    else {
+        anyhow::bail!("missing byte source for {}", artifact.display_name);
+    };
+    let mut file = File::open(&path)
+        .with_context(|| format!("failed to open byte source {}", path.display()))?;
+    let mut buffer = vec![0_u8; HEX_SEARCH_CHUNK_BYTES];
+    let mut carry = Vec::<u8>::new();
+    let mut file_offset = 0_u64;
+    let mut chunk_count = 0_u64;
+
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to read byte source {}", path.display()))?;
+        if read == 0 {
+            return Ok(HexFindResult {
+                result_offset: None,
+                bytes_scanned: file_offset,
+                chunk_count,
+                file_size: artifact.size,
+            });
+        }
+        chunk_count += 1;
+        let search_base = file_offset.saturating_sub(carry.len() as u64);
+        let mut window = Vec::with_capacity(carry.len() + read);
+        window.extend_from_slice(&carry);
+        window.extend_from_slice(&buffer[..read]);
+
+        if let Some(index) = window
+            .windows(needle.len())
+            .position(|candidate| candidate == needle)
+        {
+            let result_offset = search_base + index as u64;
+            return Ok(HexFindResult {
+                result_offset: Some(result_offset),
+                bytes_scanned: (file_offset + read as u64).min(artifact.size),
+                chunk_count,
+                file_size: artifact.size,
+            });
+        }
+
+        let overlap = needle.len().saturating_sub(1).min(window.len());
+        carry.clear();
+        if overlap > 0 {
+            carry.extend_from_slice(&window[window.len() - overlap..]);
+        }
+        file_offset += read as u64;
+    }
+}
+
+fn record_hex_find_job(
+    project: &ProjectDatabase,
+    needle: &HexSearchNeedle,
+    result: &HexFindResult,
+) -> anyhow::Result<()> {
+    let Some(artifact) = load_active_artifact(project)? else {
+        return Ok(());
+    };
+    let file_size = result.file_size;
+    let started_at = OffsetDateTime::now_utc();
+    let job_repo = AnalysisJobRepository::new(project.connection());
+    let job = job_repo
+        .insert(&revdeck_db::NewAnalysisJob {
+            analysis_run_id: None,
+            artifact_key: Some(artifact.object_ref.key.to_string()),
+            pass_name: "hex.find".to_string(),
+            profile: "interactive".to_string(),
+            status: "running".to_string(),
+            progress_current: 0,
+            progress_total: Some(file_size),
+            objects_produced: 0,
+            diagnostics_count: 0,
+            byte_limit: Some(file_size),
+            function_limit: None,
+            time_limit_ms: None,
+            metadata_json: serde_json::json!({
+                "kind": "hex search job",
+                "needle": needle.label,
+                "needle_mode": needle.mode.as_str(),
+                "needle_len": needle.bytes.len(),
+                "parameters": {
+                    "offset_space": "file",
+                    "bytes_scanned": 0,
+                    "chunk_count": 0,
+                    "chunk_size": HEX_SEARCH_CHUNK_BYTES,
+                    "file_size": file_size
+                },
+                "cancel_state": "not_requested",
+                "search_progress": "started"
+            })
+            .to_string(),
+            started_at,
+        })
+        .context("failed to record hex search job")?;
+    let status = if result.result_offset.is_some() {
+        "succeeded"
+    } else {
+        "skipped"
+    };
+    let search_result = if result.result_offset.is_some() {
+        "match"
+    } else {
+        "no_match"
+    };
+    let metadata_json = serde_json::json!({
+        "kind": "hex search job",
+        "needle": needle.label,
+        "needle_mode": needle.mode.as_str(),
+        "needle_len": needle.bytes.len(),
+        "result": search_result,
+        "result_offset": result.result_offset,
+        "parameters": {
+            "offset_space": "file",
+            "bytes_scanned": result.bytes_scanned,
+            "chunk_count": result.chunk_count,
+            "chunk_size": HEX_SEARCH_CHUNK_BYTES,
+            "file_size": file_size,
+            "result_offset": result.result_offset
+        },
+        "cancel_state": "not_requested",
+        "search_progress": "complete",
+        "navigation": result.result_offset.map(|offset| format!(":hex 0x{offset:x}"))
+    })
+    .to_string();
+    job_repo
+        .finish(
+            job.id,
+            &revdeck_db::AnalysisJobUpdate {
+                status: status.to_string(),
+                progress_current: result.bytes_scanned,
+                progress_total: Some(file_size),
+                objects_produced: u64::from(result.result_offset.is_some()),
+                diagnostics_count: 0,
+                metadata_json,
+                finished_at: OffsetDateTime::now_utc(),
+            },
+        )
+        .context("failed to finish hex search job")?;
+    Ok(())
+}
+
+fn hex_find_scan_summary(result: &HexFindResult) -> String {
+    format!(
+        "scanned {}/{} bytes in {}",
+        result.bytes_scanned,
+        result.file_size,
+        format_chunk_count(result.chunk_count)
+    )
+}
+
+fn format_chunk_count(count: u64) -> String {
+    if count == 1 {
+        "1 chunk".to_string()
+    } else {
+        format!("{count} chunks")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1872,6 +2702,227 @@ impl TuiShellState {
         Ok(outcome)
     }
 
+    pub fn submit_project_command(
+        &mut self,
+        input: &str,
+        snapshot: &mut WorkspaceSnapshot,
+        project: &ProjectDatabase,
+    ) -> Result<Option<CommandOutcome>, CommandDiagnostic> {
+        if let Some(command) = parse_hex_command(input)? {
+            self.apply_hex_command(command, snapshot, project)?;
+            self.command_mode = false;
+            self.command_input.clear();
+            self.last_error = None;
+            return Ok(None);
+        }
+        let query = ObjectQueryRepository::new(project.connection());
+        self.submit_command(input, &query).map(Some)
+    }
+
+    fn apply_hex_command(
+        &mut self,
+        command: HexCommand,
+        snapshot: &mut WorkspaceSnapshot,
+        project: &ProjectDatabase,
+    ) -> Result<(), CommandDiagnostic> {
+        match command {
+            HexCommand::Goto(offset) => {
+                let next_hex = load_hex_view_from_project(project, offset).map_err(|err| {
+                    CommandDiagnostic::new(CommandDiagnosticKind::QueryFailed, err.to_string())
+                })?;
+                snapshot.hex = next_hex;
+                self.active_lens = NavigationLens::Hex;
+                self.nav_index = WORKSPACE_LENSES
+                    .iter()
+                    .position(|candidate| *candidate == NavigationLens::Hex)
+                    .unwrap_or(self.nav_index);
+                self.main_cursor = 0;
+                self.focus = PaneFocus::Main;
+                self.sync_selection_from_cursor(snapshot);
+                self.status_line = format!(
+                    "hex file offset=0x{:08x} rows={}",
+                    snapshot.hex.base_offset,
+                    snapshot.hex.rows.len()
+                );
+            }
+            HexCommand::CurrentObject => {
+                let Some(selected) = self.selected.as_ref() else {
+                    self.status_line = "hex current: no selected object".to_string();
+                    return Ok(());
+                };
+                let (offset, status_line) = if let Some(offset) =
+                    selected_object_file_offset(snapshot, selected)
+                {
+                    (
+                        offset,
+                        format!("hex current: match at file offset 0x{offset:08x}"),
+                    )
+                } else {
+                    let Some(artifact) = snapshot.overview.artifact.as_ref() else {
+                        self.status_line = "hex current: no artifact for VA mapping".to_string();
+                        return Ok(());
+                    };
+                    let Some(virtual_address) = selected_object_virtual_address(snapshot, selected)
+                    else {
+                        self.status_line = format!(
+                            "hex current: {} has no explicit file/byte offset or VA",
+                            short_ref(selected)
+                        );
+                        return Ok(());
+                    };
+                    let ranges = IndexRepository::new(project.connection())
+                        .section_offset_mappings(artifact)
+                        .map_err(|err| {
+                            CommandDiagnostic::new(
+                                CommandDiagnosticKind::QueryFailed,
+                                err.to_string(),
+                            )
+                        })?;
+                    let mapping = map_va_to_file_offset(virtual_address, &ranges);
+                    let Some(offset) = mapping.file_offset else {
+                        self.status_line = format!("hex current: {}", mapping.message);
+                        return Ok(());
+                    };
+                    (
+                        offset,
+                        format!(
+                            "hex current: {}; match at file offset 0x{offset:08x}",
+                            mapping.message
+                        ),
+                    )
+                };
+                let next_hex = load_hex_view_from_project(project, offset).map_err(|err| {
+                    CommandDiagnostic::new(CommandDiagnosticKind::QueryFailed, err.to_string())
+                })?;
+                snapshot.hex = next_hex;
+                self.active_lens = NavigationLens::Hex;
+                self.nav_index = WORKSPACE_LENSES
+                    .iter()
+                    .position(|candidate| *candidate == NavigationLens::Hex)
+                    .unwrap_or(self.nav_index);
+                let bytes_per_row = snapshot.hex.bytes_per_row as u64;
+                self.main_cursor = snapshot
+                    .hex
+                    .rows
+                    .iter()
+                    .position(|row| {
+                        offset >= row.offset && offset < row.offset.saturating_add(bytes_per_row)
+                    })
+                    .unwrap_or(0);
+                self.focus = PaneFocus::Main;
+                self.sync_selection_from_cursor(snapshot);
+                self.status_line = status_line;
+            }
+            HexCommand::Search(needle) => {
+                let scan_summary = hex_window_scan_summary(&snapshot.hex);
+                let Some((row_index, offset)) = find_hex_needle(&snapshot.hex, &needle.bytes)
+                else {
+                    self.status_line = format!(
+                        "hex search: no match for {} ({scan_summary}); try :hex-find {}",
+                        needle.label, needle.label
+                    );
+                    return Ok(());
+                };
+                self.active_lens = NavigationLens::Hex;
+                self.nav_index = WORKSPACE_LENSES
+                    .iter()
+                    .position(|candidate| *candidate == NavigationLens::Hex)
+                    .unwrap_or(self.nav_index);
+                self.main_cursor = row_index;
+                self.focus = PaneFocus::Main;
+                self.sync_selection_from_cursor(snapshot);
+                let window_offset = offset.saturating_sub(snapshot.hex.base_offset);
+                self.status_line = format!(
+                    "hex search: match at file offset 0x{offset:08x} (window +0x{window_offset:x}) for {} ({scan_summary})",
+                    needle.label
+                );
+            }
+            HexCommand::FileSearch(needle) => {
+                let result = find_hex_needle_in_project(project, &needle.bytes).map_err(|err| {
+                    CommandDiagnostic::new(CommandDiagnosticKind::QueryFailed, err.to_string())
+                })?;
+                record_hex_find_job(project, &needle, &result).map_err(|err| {
+                    CommandDiagnostic::new(CommandDiagnosticKind::QueryFailed, err.to_string())
+                })?;
+                let offset = result.result_offset;
+                let Some(offset) = offset else {
+                    self.status_line = format!(
+                        "hex find: no match for {} ({})",
+                        needle.label,
+                        hex_find_scan_summary(&result)
+                    );
+                    return Ok(());
+                };
+                let next_hex = load_hex_view_from_project(project, offset).map_err(|err| {
+                    CommandDiagnostic::new(CommandDiagnosticKind::QueryFailed, err.to_string())
+                })?;
+                snapshot.hex = next_hex;
+                self.active_lens = NavigationLens::Hex;
+                self.nav_index = WORKSPACE_LENSES
+                    .iter()
+                    .position(|candidate| *candidate == NavigationLens::Hex)
+                    .unwrap_or(self.nav_index);
+                let bytes_per_row = snapshot.hex.bytes_per_row as u64;
+                self.main_cursor = snapshot
+                    .hex
+                    .rows
+                    .iter()
+                    .position(|row| {
+                        offset >= row.offset && offset < row.offset.saturating_add(bytes_per_row)
+                    })
+                    .unwrap_or(0);
+                self.focus = PaneFocus::Main;
+                self.sync_selection_from_cursor(snapshot);
+                self.status_line = format!(
+                    "hex find: match at file offset 0x{offset:08x} for {} ({})",
+                    needle.label,
+                    hex_find_scan_summary(&result)
+                );
+            }
+            HexCommand::Bookmark(label) => {
+                let Some(offset) = current_hex_offset(snapshot, self.main_cursor) else {
+                    self.status_line = "hex bookmark: no byte row selected".to_string();
+                    return Ok(());
+                };
+                let subject = hex_offset_subject(&snapshot.hex, offset)?;
+                let now = OffsetDateTime::now_utc();
+                MemoryRepository::new(project.connection())
+                    .upsert_tag(&subject, label.trim(), now, now)
+                    .map_err(|err| {
+                        CommandDiagnostic::new(CommandDiagnosticKind::QueryFailed, err.to_string())
+                    })?;
+                load_hex_markers(project.connection(), &mut snapshot.hex);
+                self.status_line = format!("hex bookmark: 0x{offset:08x} tagged {}", label.trim());
+            }
+            HexCommand::Note(note) => {
+                let Some(offset) = current_hex_offset(snapshot, self.main_cursor) else {
+                    self.status_line = "hex note: no byte row selected".to_string();
+                    return Ok(());
+                };
+                let subject = hex_offset_subject(&snapshot.hex, offset)?;
+                let now = OffsetDateTime::now_utc();
+                let evidence =
+                    snapshot.hex.artifact.clone().map(|artifact| {
+                        revdeck_core::AnnotationEvidence::new(artifact, 0, "artifact")
+                    });
+                MemoryRepository::new(project.connection())
+                    .upsert_note(
+                        &subject,
+                        note.trim(),
+                        now,
+                        now,
+                        evidence.into_iter().collect(),
+                    )
+                    .map_err(|err| {
+                        CommandDiagnostic::new(CommandDiagnosticKind::QueryFailed, err.to_string())
+                    })?;
+                load_hex_markers(project.connection(), &mut snapshot.hex);
+                self.status_line = format!("hex note: 0x{offset:08x} noted");
+            }
+        }
+        Ok(())
+    }
+
     pub fn handle_key_event(
         &mut self,
         key: KeyEvent,
@@ -2007,6 +3058,28 @@ impl TuiShellState {
             _ => {}
         }
         Ok(())
+    }
+
+    pub fn handle_project_key_event(
+        &mut self,
+        key: KeyEvent,
+        snapshot: &mut WorkspaceSnapshot,
+        project: &ProjectDatabase,
+        query: &dyn ObjectGraphQuery,
+    ) -> Result<(), CommandDiagnostic> {
+        if key.kind != KeyEventKind::Press {
+            return Ok(());
+        }
+        if self.command_mode && key.code == KeyCode::Enter {
+            let input = self.command_input.clone();
+            if let Err(err) = self.submit_project_command(&input, snapshot, project) {
+                self.status_line = err.message.clone();
+                self.last_error = Some(err.clone());
+                return Err(err);
+            }
+            return Ok(());
+        }
+        self.handle_key_event(key, snapshot, query)
     }
 
     pub fn persist_session_to_project(
@@ -2513,9 +3586,18 @@ pub fn run_project_tui(project_dir: impl AsRef<Path>) -> anyhow::Result<()> {
 
     enable_raw_mode().context("failed to enable raw mode")?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen).context("failed to enter alternate screen")?;
+    if let Err(err) = execute!(stdout, EnterAlternateScreen) {
+        let _ = disable_raw_mode();
+        return Err(err).context("failed to enter alternate screen");
+    }
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend).context("failed to create terminal")?;
+    let mut terminal = match Terminal::new(backend) {
+        Ok(terminal) => terminal,
+        Err(err) => {
+            let _ = disable_raw_mode();
+            return Err(err).context("failed to create terminal");
+        }
+    };
     let result = run_project_terminal_app(&mut terminal, &mut app, &mut snapshot, &project);
     let restore_result = restore_terminal(&mut terminal);
     result.and(restore_result)?;
@@ -2585,7 +3667,7 @@ fn run_project_terminal_app<B: Backend>(
             if let Event::Key(key) = event::read().context("failed to read terminal event")? {
                 if key.kind == KeyEventKind::Press {
                     let query = ObjectQueryRepository::new(project.connection());
-                    let _ = app.handle_key_event(key, snapshot, &query);
+                    let _ = app.handle_project_key_event(key, snapshot, project, &query);
                 }
             }
         }
@@ -3195,6 +4277,7 @@ fn render_hex_viewer(
                 Style::default()
             };
             Row::new(vec![
+                Cell::from(format!("{:<3}", row.marker)),
                 Cell::from(format!("0x{:08x}", row.offset)),
                 Cell::from(row.hex.clone()),
                 Cell::from(row.ascii.clone()),
@@ -3218,13 +4301,14 @@ fn render_hex_viewer(
     let table = Table::new(
         rows,
         [
+            Constraint::Length(4),
             Constraint::Length(12),
             Constraint::Length(48),
             Constraint::Min(16),
         ],
     )
     .header(
-        Row::new(vec!["offset", "hex bytes", "ascii"])
+        Row::new(vec!["mk", "offset", "hex bytes", "ascii"])
             .style(Style::default().add_modifier(Modifier::BOLD)),
     )
     .block(
@@ -4111,6 +5195,9 @@ fn inspector_lines(app: &TuiShellState, snapshot: &WorkspaceSnapshot) -> Vec<Ins
         append_job_inspector_lines(&mut lines, snapshot.selected_job(app.main_cursor));
         return lines;
     }
+    if app.active_lens == NavigationLens::Hex {
+        append_hex_inspector_lines(&mut lines, app, snapshot);
+    }
     if app.active_lens == NavigationLens::LocalGraph {
         if let Some(edge) = selected_graph_edge_detail(app, snapshot) {
             append_graph_edge_inspector_lines(&mut lines, &edge);
@@ -4196,6 +5283,80 @@ fn inspector_lines(app: &TuiShellState, snapshot: &WorkspaceSnapshot) -> Vec<Ins
     lines
 }
 
+fn append_hex_inspector_lines(
+    lines: &mut Vec<InspectorLine>,
+    app: &TuiShellState,
+    snapshot: &WorkspaceSnapshot,
+) {
+    lines.push(InspectorLine::plain("Hex Inspector"));
+    let selected_offset = current_hex_offset(snapshot, app.main_cursor).unwrap_or(0);
+    lines.push(InspectorLine::plain(format!(
+        "File offset: 0x{selected_offset:08x}"
+    )));
+    if let Some(source_path) = snapshot.hex.source_path.as_deref() {
+        lines.push(InspectorLine::plain(format!(
+            "Source path: {}",
+            truncate(source_path, 72)
+        )));
+    }
+    if let Some(row) = snapshot.hex.rows.get(app.main_cursor) {
+        if !row.marker_details.is_empty() {
+            lines.push(InspectorLine::plain("Byte notes"));
+            for detail in row.marker_details.iter().take(4) {
+                lines.push(InspectorLine::plain(format!("- {detail}")));
+            }
+        }
+    }
+
+    let nearby = nearby_hex_objects(snapshot, selected_offset, 0x20);
+    if !nearby.is_empty() {
+        lines.push(InspectorLine::plain("Nearby objects"));
+        for object in nearby {
+            lines.push(object);
+        }
+    }
+    lines.push(InspectorLine::plain(""));
+}
+
+fn nearby_hex_objects(
+    snapshot: &WorkspaceSnapshot,
+    selected_offset: u64,
+    radius: u64,
+) -> Vec<InspectorLine> {
+    let start = selected_offset.saturating_sub(radius);
+    let end = selected_offset.saturating_add(radius);
+    let mut matches = snapshot
+        .sections
+        .iter()
+        .chain(snapshot.strings.iter())
+        .chain(snapshot.functions.iter())
+        .chain(snapshot.imports.iter())
+        .filter_map(|summary| {
+            let offset = selected_object_file_offset(snapshot, &summary.object_ref)?;
+            (offset >= start && offset <= end).then_some((offset, summary))
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.object_ref.cmp(&right.1.object_ref))
+    });
+    matches
+        .into_iter()
+        .take(4)
+        .map(|(offset, summary)| {
+            InspectorLine::jump(
+                format!(
+                    "0x{offset:08x} {} {}",
+                    summary.object_ref.kind,
+                    truncate(summary.label(), 32)
+                ),
+                summary.object_ref.clone(),
+            )
+        })
+        .collect()
+}
+
 fn append_graph_edge_inspector_lines(lines: &mut Vec<InspectorLine>, edge: &GraphEdgeDetail) {
     lines.push(InspectorLine::plain(""));
     lines.push(InspectorLine::plain("Selected Edge"));
@@ -4256,6 +5417,8 @@ fn append_job_inspector_lines(
         "Objects: {}  Diagnostics: {}",
         job.objects_produced, job.diagnostics_count
     )));
+    append_job_state_guidance(lines, job);
+    append_hex_find_job_guidance(lines, job);
     lines.push(InspectorLine::plain(format!("Started: {}", job.started_at)));
     if let Some(finished_at) = &job.finished_at {
         lines.push(InspectorLine::plain(format!("Finished: {finished_at}")));
@@ -4268,7 +5431,96 @@ fn append_job_inspector_lines(
     append_job_detail_items(lines, "Parameters", &job.parameter_items);
     append_job_snippets(lines, "Diagnostics", &job.diagnostic_snippets);
     append_job_snippets(lines, "Logs", &job.log_snippets);
-    append_job_state_guidance(lines, job);
+}
+
+fn append_hex_find_job_guidance(lines: &mut Vec<InspectorLine>, job: &AnalysisJobRow) {
+    if job.pass_name != "hex.find" {
+        return;
+    }
+    lines.push(InspectorLine::plain(""));
+    lines.push(InspectorLine::plain("Hex search job"));
+    if let Some(needle) = job_detail_value(job, "needle") {
+        lines.push(InspectorLine::plain(format!("Needle: {needle}")));
+    }
+    if let Some(mode) = job_detail_value(job, "needle_mode") {
+        lines.push(InspectorLine::plain(format!("Needle mode: {mode}")));
+    }
+    if let Some(length) = job_detail_value(job, "needle_len") {
+        lines.push(InspectorLine::plain(format!(
+            "Needle length: {length} bytes"
+        )));
+    }
+    if let Some(offset_space) = job_detail_value(job, "offset_space") {
+        lines.push(InspectorLine::plain(format!(
+            "Offset space: {offset_space}"
+        )));
+    }
+    if let Some(bytes_scanned) = job_detail_value(job, "bytes_scanned") {
+        let chunk_count = job_detail_value(job, "chunk_count")
+            .and_then(parse_job_detail_u64)
+            .unwrap_or(0);
+        let scanned_progress = job_detail_value(job, "file_size")
+            .map(|file_size| format!("{bytes_scanned}/{file_size}"))
+            .unwrap_or_else(|| bytes_scanned.to_string());
+        lines.push(InspectorLine::plain(format!(
+            "Scanned: {scanned_progress} bytes in {}",
+            format_chunk_count(chunk_count)
+        )));
+    }
+    let navigation = job_detail_value(job, "navigation").filter(|value| *value != "null");
+    let result_offset = job_detail_value(job, "result_offset")
+        .and_then(parse_job_detail_u64)
+        .or_else(|| navigation.and_then(parse_hex_navigation_offset));
+    if result_offset.is_some() {
+        lines.push(InspectorLine::plain("Result: match"));
+    } else {
+        lines.push(InspectorLine::plain("Result: no match"));
+    }
+    if let Some(offset) = result_offset {
+        lines.push(InspectorLine::plain(format!(
+            "Result offset: 0x{offset:08x}"
+        )));
+    }
+    if let Some(navigation) = navigation {
+        lines.push(InspectorLine::plain(format!(
+            "Result navigation: {navigation}"
+        )));
+    } else {
+        lines.push(InspectorLine::plain("Result navigation: no match"));
+    }
+    let cancel_state = job_detail_value(job, "cancel_state").unwrap_or("not_requested");
+    lines.push(InspectorLine::plain(format!(
+        "Cancel state: {cancel_state}"
+    )));
+}
+
+fn job_detail_value<'job>(job: &'job AnalysisJobRow, key: &str) -> Option<&'job str> {
+    job.metadata_items
+        .iter()
+        .chain(job.parameter_items.iter())
+        .find(|item| item.key == key)
+        .map(|item| item.value.as_str())
+}
+
+fn parse_job_detail_u64(value: &str) -> Option<u64> {
+    let value = value.trim().trim_matches('"');
+    if value == "null" {
+        return None;
+    }
+    if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        return u64::from_str_radix(hex, 16).ok();
+    }
+    value.parse::<u64>().ok()
+}
+
+fn parse_hex_navigation_offset(value: &str) -> Option<u64> {
+    value
+        .trim()
+        .strip_prefix(":hex ")
+        .and_then(parse_job_detail_u64)
 }
 
 fn append_diff_delta_lines(
@@ -4735,18 +5987,22 @@ fn append_job_state_guidance(lines: &mut Vec<InspectorLine>, job: &AnalysisJobRo
             lines.push(InspectorLine::plain(
                 "State: failed - review diagnostics and logs before continuing triage.",
             ));
+            lines.push(InspectorLine::plain("Recovery: rerun --no-tui"));
+            lines.push(InspectorLine::plain("Cancel: no destructive action"));
         }
         "skipped" => {
             lines.push(InspectorLine::plain(""));
             lines.push(InspectorLine::plain(
                 "State: skipped - profile or precondition degradation, not a destructive action.",
             ));
+            lines.push(InspectorLine::plain("Recovery: use balanced/deep"));
         }
         "running" | "queued" => {
             lines.push(InspectorLine::plain(""));
             lines.push(InspectorLine::plain(
-                "State: in progress at snapshot load; live refresh is deferred.",
+                "State: running; live refresh updates progress.",
             ));
+            lines.push(InspectorLine::plain("Cancel: read-only until safe"));
         }
         _ => {}
     }
@@ -5187,6 +6443,11 @@ fn search_kind(
 
 fn analysis_job_row_from_record(record: &AnalysisJobRecord) -> AnalysisJobRow {
     let detail = AnalysisJobDetail::from_metadata_json(&record.metadata_json);
+    let metadata_summary = if record.pass_name == "hex.find" {
+        hex_find_metadata_summary(&detail)
+    } else {
+        detail.summary()
+    };
     AnalysisJobRow {
         id: record.id,
         analysis_run_id: record.analysis_run_id,
@@ -5203,12 +6464,66 @@ fn analysis_job_row_from_record(record: &AnalysisJobRecord) -> AnalysisJobRow {
         started_at: format_job_time(record.started_at),
         finished_at: record.finished_at.map(format_job_time),
         updated_at: format_job_time(record.updated_at),
-        metadata_summary: detail.summary(),
+        metadata_summary,
         metadata_items: detail.metadata_items,
         parameter_items: detail.parameter_items,
         diagnostic_snippets: detail.diagnostic_snippets,
         log_snippets: detail.log_snippets,
     }
+}
+
+fn hex_find_metadata_summary(detail: &AnalysisJobDetail) -> String {
+    let needle = detail
+        .metadata_items
+        .iter()
+        .find(|item| item.key == "needle")
+        .map(|item| item.value.as_str())
+        .unwrap_or("?");
+    let result_offset =
+        job_detail_item_value(detail, "result_offset").and_then(parse_job_detail_u64);
+    let result = job_detail_item_value(detail, "result").unwrap_or_else(|| {
+        if result_offset.is_some() {
+            "match"
+        } else {
+            "no_match"
+        }
+    });
+    let mode = job_detail_item_value(detail, "needle_mode")
+        .map(|mode| format!("mode={mode}"))
+        .unwrap_or_else(|| "mode=?".to_string());
+    let length = job_detail_item_value(detail, "needle_len")
+        .map(|length| format!("len={length}"))
+        .unwrap_or_else(|| "len=?".to_string());
+    let scanned = match (
+        job_detail_item_value(detail, "bytes_scanned"),
+        job_detail_item_value(detail, "file_size"),
+    ) {
+        (Some(bytes_scanned), Some(file_size)) => format!(" scanned={bytes_scanned}/{file_size}"),
+        _ => String::new(),
+    };
+    let chunks = job_detail_item_value(detail, "chunk_count")
+        .and_then(parse_job_detail_u64)
+        .map(|chunk_count| format!(" chunks={}", format_chunk_count(chunk_count)))
+        .unwrap_or_default();
+    if let Some(offset) = result_offset {
+        format!(
+            "needle={needle} {mode} {length} result={result} offset=0x{offset:08x}{scanned}{chunks}"
+        )
+    } else {
+        format!("needle={needle} {mode} {length} result={result}{scanned}{chunks}")
+    }
+}
+
+fn job_detail_item_value<'detail>(
+    detail: &'detail AnalysisJobDetail,
+    key: &str,
+) -> Option<&'detail str> {
+    detail
+        .metadata_items
+        .iter()
+        .chain(detail.parameter_items.iter())
+        .find(|item| item.key == key)
+        .map(|item| item.value.as_str())
 }
 
 fn format_job_progress(current: u64, total: Option<u64>) -> String {
@@ -5407,7 +6722,9 @@ fn help_overlay_lines(app: &TuiShellState, snapshot: &WorkspaceSnapshot) -> Vec<
         Line::from(":tag current suspicious  :note current reviewed path  :rename current name  :status current reviewed"),
         Line::from(":finding new high title  :finding link <finding> current evidence"),
         Line::from(":export markdown report.md  :export json report.json"),
-        Line::from("Fast open: analyze enters the TUI after registration; use J for Jobs and x for Hex Viewer while background analysis runs."),
+        Line::from(r#":hex-search window reports file + window offsets; :hex-find full file scan"#),
+        Line::from(r#"Hex text escapes: \\ \" \' \n \r \t \0 \xNN"#),
+        Line::from("Fast open: analyze enters the TUI immediately; use J Jobs or x Hex while analysis runs."),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Current next step",
@@ -5442,6 +6759,14 @@ fn command_deck_lines(app: &TuiShellState, snapshot: &WorkspaceSnapshot) -> Vec<
         Line::from(":find string <term>        search strings"),
         Line::from(":find import <term>        search imports"),
         Line::from("x / H                       open read-only Hex Viewer"),
+        Line::from(":hex 0x200                 jump Hex Viewer to offset"),
+        Line::from(":hex current/selected or :hex-current jump selected offset"),
+        Line::from(":hex-search / :bytes-search find bytes or text in current Hex window"),
+        Line::from("                            status shows file offset and window +0x offset"),
+        Line::from(":hex-find / :bytes-find scan full file bytes; e.g. `0xde 0xad`"),
+        Line::from(r#"Hex text escapes: \\ \" \' \n \r \t \0 \xNN"#),
+        Line::from(":hex-bookmark current <tag> mark selected byte row"),
+        Line::from(":hex-note current <text>   persist byte note"),
         Line::from("J                           inspect background analysis jobs"),
         Line::from(":tag current <tag>         add analysis memory"),
         Line::from(":note current <text>       add analyst note"),

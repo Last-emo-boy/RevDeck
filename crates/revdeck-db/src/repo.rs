@@ -2,8 +2,8 @@ use revdeck_core::{
     AnalysisRun, AnalysisRunStatus, Annotation, AnnotationEvidence, AnnotationKind, ArtifactFormat,
     ArtifactKind, DiffSummaryViewModel, EdgeKind, ExportAnalysisJob, ExportContext,
     ExportPluginRun, Finding, FindingEvidence, FindingSeverity, FindingStatus, FunctionScore,
-    FunctionScoreInput, ImportStatus, NewAnalysisRun, ObjectKind, ObjectRef, RadarEvidence, Report,
-    ScoreReason, StableObjectKey, FUNCTION_RADAR_SCORE_KIND,
+    FunctionScoreInput, HexOffsetMappingRange, ImportStatus, NewAnalysisRun, ObjectKind, ObjectRef,
+    RadarEvidence, Report, ScoreReason, StableObjectKey, FUNCTION_RADAR_SCORE_KIND,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
@@ -944,6 +944,33 @@ impl<'conn> IndexRepository<'conn> {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn section_offset_mappings(
+        &self,
+        artifact: &ObjectRef,
+    ) -> rusqlite::Result<Vec<HexOffsetMappingRange>> {
+        let mut statement = self.connection.prepare(
+            "SELECT sec.name, sec.virtual_address, sec.file_offset, sec.size
+            FROM sections sec
+            JOIN objects o ON o.object_key = sec.object_key
+            WHERE o.artifact_key = ?1
+              AND sec.virtual_address IS NOT NULL
+              AND sec.file_offset IS NOT NULL
+              AND sec.size > 0
+            ORDER BY sec.virtual_address, sec.file_offset, sec.name",
+        )?;
+        let mappings = statement
+            .query_map([artifact.key.as_str()], |row| {
+                Ok(HexOffsetMappingRange {
+                    section_name: row.get(0)?,
+                    virtual_address: from_i64(row.get(1)?),
+                    file_offset: from_i64(row.get(2)?),
+                    size: from_i64(row.get(3)?),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(mappings)
     }
 
     pub fn upsert_symbol(&self, symbol: &SymbolRecord) -> rusqlite::Result<()> {
@@ -6021,6 +6048,81 @@ mod tests {
                 .unwrap(),
             vec!["symbol".to_string()]
         );
+    }
+
+    #[test]
+    fn section_offset_mappings_return_only_provable_ranges() {
+        let connection = migrated_connection();
+        let artifact_ref = ObjectRef::artifact("abc123", "fixtures/mappings").unwrap();
+        ArtifactRepository::new(&connection)
+            .upsert_artifact(&artifact_record(artifact_ref.clone(), "mappings"))
+            .unwrap();
+        let object_repo = ObjectRepository::new(&connection);
+        object_repo
+            .upsert_object(&StoredObject {
+                object_ref: artifact_ref.clone(),
+                artifact_key: None,
+                display_name: Some("mappings".to_string()),
+                address: None,
+                size: Some(256),
+                source_run_id: None,
+                metadata_json: "{}".to_string(),
+            })
+            .unwrap();
+        let mapped_section = ObjectRef::new(
+            ObjectKind::Section,
+            revdeck_core::StableObjectKey::section(&artifact_ref.key, ".text", 0x401000, 0x80)
+                .unwrap(),
+        );
+        let unmapped_section = ObjectRef::new(
+            ObjectKind::Section,
+            revdeck_core::StableObjectKey::section(&artifact_ref.key, ".bss", 0x402000, 0x40)
+                .unwrap(),
+        );
+        for section in [&mapped_section, &unmapped_section] {
+            object_repo
+                .upsert_object(&StoredObject {
+                    object_ref: section.clone(),
+                    artifact_key: Some(artifact_ref.key.to_string()),
+                    display_name: Some(section.key.to_string()),
+                    address: Some(0x401000),
+                    size: Some(0x80),
+                    source_run_id: None,
+                    metadata_json: "{}".to_string(),
+                })
+                .unwrap();
+        }
+        let index_repo = IndexRepository::new(&connection);
+        index_repo
+            .upsert_section(&SectionRecord {
+                object_ref: mapped_section,
+                name: ".text".to_string(),
+                virtual_address: Some(0x401000),
+                file_offset: Some(0x200),
+                size: 0x80,
+                flags: "AX".to_string(),
+                entropy: None,
+            })
+            .unwrap();
+        index_repo
+            .upsert_section(&SectionRecord {
+                object_ref: unmapped_section,
+                name: ".bss".to_string(),
+                virtual_address: Some(0x402000),
+                file_offset: None,
+                size: 0x40,
+                flags: "WA".to_string(),
+                entropy: None,
+            })
+            .unwrap();
+
+        let mappings = index_repo.section_offset_mappings(&artifact_ref).unwrap();
+
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].section_name, ".text");
+        assert_eq!(mappings[0].virtual_address, 0x401000);
+        assert_eq!(mappings[0].file_offset, 0x200);
+        assert_eq!(mappings[0].size, 0x80);
     }
 
     #[test]

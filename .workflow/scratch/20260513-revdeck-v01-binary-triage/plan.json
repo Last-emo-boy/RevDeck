@@ -5,7 +5,7 @@
     "phase_dir": ".workflow/scratch/20260513-revdeck-v01-binary-triage",
     "session_folder": ".workflow/.csv-wave/20260513-plan-revdeck-v01-binary-triage",
     "created_at": "2026-05-13T01:45:00+08:00",
-    "status": "planned",
+    "status": "completed",
     "scope": {
       "include": [
         "Project creation/open and SQLite-backed project DB",

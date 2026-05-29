@@ -1014,6 +1014,7 @@ dependencies = [
  "revdeck-db",
  "revdeck-index",
  "revdeck-tui",
+ "serde_json",
  "tempfile",
  "time",
 ]

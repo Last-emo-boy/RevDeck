@@ -353,6 +353,8 @@ Hex Viewer 是只读 byte-first 入口。它从 artifact 的 `source_path` 或 `
 - 在 `binary.parse` 仍是 `running` 时检查文件头、magic bytes 和可疑 ASCII 片段。
 - 对照 Binary Map、Strings、Imports 的索引结果确认原始偏移。
 - 分析失败时仍保留最基本的 bytes 检查能力。
+- 使用 `:hex 0x200` 或 `:goto 0x200` 跳转 file offset，`:hex current`、`:hex selected` 或 `:hex-current` 从当前对象跳转到已知 file/byte offset。
+- 使用 `:hex-search` 或 `:bytes-search` 只在当前 Hex window 内搜索，命中状态同时显示 file offset 和 `window +0x...` 相对位置；使用 `:hex-find` 或 `:bytes-find` 扫描完整文件并跳转到命中位置。`hex:`、`bytes:`、`raw:` 是等价 byte 前缀，byte token 可写成 `de ad` 或 `0xde 0xad`；`text:`、`ascii:`、`string:`、`str:` 是等价文本前缀。quoted 文本支持 `\\`、`\"`、`\'`、`\n`、`\r`、`\t`、`\0`、`\xNN`。
 
 ### Binary Map
 

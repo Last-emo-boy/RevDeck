@@ -159,6 +159,8 @@ pub struct AnalysisJobsSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HexByteRow {
     pub offset: u64,
+    pub marker: String,
+    pub marker_details: Vec<String>,
     pub hex: String,
     pub ascii: String,
 }
@@ -204,6 +206,8 @@ impl HexViewModel {
                 let offset = base_offset + (index * bytes_per_row) as u64;
                 HexByteRow {
                     offset,
+                    marker: String::new(),
+                    marker_details: Vec::new(),
                     hex: format_hex_bytes(chunk, bytes_per_row),
                     ascii: format_ascii_bytes(chunk),
                 }
@@ -219,6 +223,95 @@ impl HexViewModel {
             rows,
             status: "ready".to_string(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HexOffsetMappingRange {
+    pub section_name: String,
+    pub virtual_address: u64,
+    pub file_offset: u64,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HexOffsetMappingStatus {
+    Mapped,
+    NoSections,
+    OutOfRange,
+    Ambiguous,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HexOffsetMapping {
+    pub status: HexOffsetMappingStatus,
+    pub source_offset: u64,
+    pub file_offset: Option<u64>,
+    pub section_name: Option<String>,
+    pub message: String,
+}
+
+pub fn map_va_to_file_offset(
+    virtual_address: u64,
+    ranges: &[HexOffsetMappingRange],
+) -> HexOffsetMapping {
+    if ranges.is_empty() {
+        return HexOffsetMapping {
+            status: HexOffsetMappingStatus::NoSections,
+            source_offset: virtual_address,
+            file_offset: None,
+            section_name: None,
+            message: "no indexed section ranges can prove a VA to file offset mapping".to_string(),
+        };
+    }
+
+    let matches = ranges
+        .iter()
+        .filter(|range| {
+            let end = range.virtual_address.saturating_add(range.size);
+            virtual_address >= range.virtual_address && virtual_address < end
+        })
+        .collect::<Vec<_>>();
+
+    if matches.is_empty() {
+        return HexOffsetMapping {
+            status: HexOffsetMappingStatus::OutOfRange,
+            source_offset: virtual_address,
+            file_offset: None,
+            section_name: None,
+            message: format!("VA 0x{virtual_address:08x} is outside indexed section ranges"),
+        };
+    }
+
+    if matches.len() > 1 {
+        let sections = matches
+            .iter()
+            .map(|range| range.section_name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return HexOffsetMapping {
+            status: HexOffsetMappingStatus::Ambiguous,
+            source_offset: virtual_address,
+            file_offset: None,
+            section_name: None,
+            message: format!(
+                "VA 0x{virtual_address:08x} maps to multiple indexed sections: {sections}"
+            ),
+        };
+    }
+
+    let range = matches[0];
+    let delta = virtual_address - range.virtual_address;
+    let file_offset = range.file_offset.saturating_add(delta);
+    HexOffsetMapping {
+        status: HexOffsetMappingStatus::Mapped,
+        source_offset: virtual_address,
+        file_offset: Some(file_offset),
+        section_name: Some(range.section_name.clone()),
+        message: format!(
+            "mapped VA 0x{virtual_address:08x} through section {} to file offset 0x{file_offset:08x}",
+            range.section_name
+        ),
     }
 }
 
@@ -1597,6 +1690,62 @@ mod tests {
             vec!["pass_skipped_by_profile: quick skipped native CFG"]
         );
         assert_eq!(detail.log_snippets, vec!["cfg skipped by quick profile"]);
+    }
+
+    #[test]
+    fn hex_offset_mapping_maps_va_with_single_section_evidence() {
+        let mapping = map_va_to_file_offset(
+            0x401020,
+            &[HexOffsetMappingRange {
+                section_name: ".text".to_string(),
+                virtual_address: 0x401000,
+                file_offset: 0x200,
+                size: 0x80,
+            }],
+        );
+
+        assert_eq!(mapping.status, HexOffsetMappingStatus::Mapped);
+        assert_eq!(mapping.file_offset, Some(0x220));
+        assert_eq!(mapping.section_name.as_deref(), Some(".text"));
+    }
+
+    #[test]
+    fn hex_offset_mapping_refuses_missing_out_of_range_and_ambiguous_ranges() {
+        let missing = map_va_to_file_offset(0x401000, &[]);
+        assert_eq!(missing.status, HexOffsetMappingStatus::NoSections);
+        assert_eq!(missing.file_offset, None);
+
+        let out_of_range = map_va_to_file_offset(
+            0x402000,
+            &[HexOffsetMappingRange {
+                section_name: ".text".to_string(),
+                virtual_address: 0x401000,
+                file_offset: 0x200,
+                size: 0x80,
+            }],
+        );
+        assert_eq!(out_of_range.status, HexOffsetMappingStatus::OutOfRange);
+        assert_eq!(out_of_range.file_offset, None);
+
+        let ambiguous = map_va_to_file_offset(
+            0x401040,
+            &[
+                HexOffsetMappingRange {
+                    section_name: ".text".to_string(),
+                    virtual_address: 0x401000,
+                    file_offset: 0x200,
+                    size: 0x80,
+                },
+                HexOffsetMappingRange {
+                    section_name: ".overlap".to_string(),
+                    virtual_address: 0x401020,
+                    file_offset: 0x300,
+                    size: 0x80,
+                },
+            ],
+        );
+        assert_eq!(ambiguous.status, HexOffsetMappingStatus::Ambiguous);
+        assert_eq!(ambiguous.file_offset, None);
     }
 
     #[test]

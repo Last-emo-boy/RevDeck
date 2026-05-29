@@ -13,5 +13,6 @@ revdeck-core = { path = "../../crates/revdeck-core" }
 revdeck-db = { path = "../../crates/revdeck-db" }
 revdeck-index = { path = "../../crates/revdeck-index" }
 revdeck-tui = { path = "../../crates/revdeck-tui" }
+serde_json.workspace = true
 tempfile.workspace = true
 time.workspace = true
